@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createScanList } from '../../src/shared/scanList'
-import { addUnit, classifyScan, isLocalDuplicate, listFromLines, lineWithCode, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, allUnitCodes } from '../../src/renderer/modules/pos/unitCart'
+import { addCodes, keepUnits, addUnit, classifyScan, isLocalDuplicate, listFromLines, lineWithCode, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, allUnitCodes } from '../../src/renderer/modules/pos/unitCart'
 import type { CartLine, Variant } from '../../src/renderer/modules/pos/types'
 
 const V = (id: number, name = `P${id}`): Variant => ({
@@ -79,5 +79,33 @@ describe('unit lines on the bill (active list = the bill)', () => {
     expect(classifyScan({})).toBe('plain')
     expect(notAvailableMessage('spk-0003', 'sold')).toBe('SPK-0003 is already sold')
     expect(notAvailableMessage('SPK-0003', 'void')).toBe('SPK-0003 is already void')
+  })
+})
+
+describe('quantity of a line with unit codes ("+", "-", typed)', () => {
+  it('addCodes puts the server-chosen codes on the line and skips codes already on the bill', () => {
+    const list = createScanList()
+    const a = addUnit([], list, V(1), 'SPK-0001', key)
+    const k = a.lines[0].key
+    const b = addCodes(a.lines, list, k, ['spk-0002', 'SPK-0001', 'SPK-0003'])
+    expect(b[0]).toMatchObject({ qty: 3, unitCodes: ['SPK-0001', 'SPK-0002', 'SPK-0003'] })
+    expect(saleLinePayload(b[0])).toMatchObject({ qty: 3, unitCodes: ['SPK-0001', 'SPK-0002', 'SPK-0003'] })
+    // nothing new: the same lines come back
+    const c = addCodes(b, list, k, ['SPK-0002'])
+    expect(c[0]).toBe(b[0])
+    expect(allUnitCodes(c)).toHaveLength(3)
+  })
+  it('keepUnits releases the codes added last, never below one, and a released code can be added again', () => {
+    const list = createScanList()
+    const a = addUnit([], list, V(1), 'SPK-0001', key)
+    const k = a.lines[0].key
+    const b = addCodes(a.lines, list, k, ['SPK-0002', 'SPK-0003'])
+    const c = keepUnits(b, list, k, 2)
+    expect(c[0]).toMatchObject({ qty: 2, unitCodes: ['SPK-0001', 'SPK-0002'] })
+    expect(isLocalDuplicate(list, 'SPK-0003')).toBe(false)
+    const d = keepUnits(c, list, k, 0)
+    expect(d[0]).toMatchObject({ qty: 1, unitCodes: ['SPK-0001'] })
+    expect(keepUnits(d, list, k, 5)[0]).toBe(d[0])
+    expect(addCodes(d, list, k, ['SPK-0003'])[0]).toMatchObject({ qty: 2, unitCodes: ['SPK-0001', 'SPK-0003'] })
   })
 })

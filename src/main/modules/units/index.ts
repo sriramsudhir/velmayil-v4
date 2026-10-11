@@ -19,6 +19,7 @@ export function register(app: App): void {
     reprintLabels: (a) => svc.reprintLabels(a),
     resolve: (a) => svc.resolve(a),
     list: (a) => svc.list(a),
+    nextAvailable: (a) => svc.nextAvailable(a),
     counts: (a) => svc.counts(a),
     markVoid: (a) => svc.markVoid(a),
     countReport: (a) => svc.countReport(a)

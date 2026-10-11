@@ -15,7 +15,7 @@ import { serialScanner, serialSupported } from '@/lib/serialScanner'
 import { hidScanner, hidSupported } from '@/lib/hidScanner'
 import { BoxRecorder, noteBoxSubmit, scanBoxKey } from '@/lib/scanInput'
 import { createScanList, duplicateMessage, type ScanList } from '@shared/scanList'
-import { addUnit, classifyScan, clearDraft, MAX_LINE_QTY, isLocalDuplicate, legacyScanAllowed, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, TRACKED_HINT, unitInfoOf, type ScanResponse } from './unitCart'
+import { addCodes, addUnit, allUnitCodes, classifyScan, keepUnits, MAX_UNIT_QTY, clearDraft, MAX_LINE_QTY, isLocalDuplicate, legacyScanAllowed, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, TRACKED_HINT, unitInfoOf, type ScanResponse } from './unitCart'
 import type { Approval, CartCustomer, CartLine, PayMethod, PosSettings, SaleResult, SavedCart, Variant } from './types'
 import './pos.css'
 
@@ -119,6 +119,32 @@ export function PosScreen() {
   const patch = (key: string, p: Partial<CartLine>) => setLinesSync((cur) => cur.map((l) => (l.key === key ? { ...l, ...p } : l)))
   const remove = (key: string) => { setLinesSync((cur) => removeLine(cur, unitList.current, key)); focusScan() }
   const removeCode = (key: string, code: string) => { setLinesSync((cur) => removeUnit(cur, unitList.current, key, code)); focusScan() }
+
+  /**
+   * "+", "-" and a typed quantity on a line with unit codes. More: the server names the next pieces in stock that are not on the
+   * bill yet; fewer: the codes added last are released. One change at a time, so two quick clicks never ask for the same piece.
+   */
+  const unitQtyQueue = useRef<Promise<void>>(Promise.resolve())
+  const changeUnitQty = (key: string, to: (have: number) => number) => {
+    unitQtyQueue.current = unitQtyQueue.current.then(async () => {
+      const line = linesRef.current.find((l) => l.key === key)
+      if (!line?.tracked) return
+      const have = line.unitCodes?.length ?? 0
+      const want = Math.max(1, Math.min(MAX_UNIT_QTY, to(have)))
+      if (want < have) { setLinesSync((cur) => keepUnits(cur, unitList.current, key, want)); return }
+      if (want === have) return
+      try {
+        const r = await call<{ codes: string[]; left: number }>('units', 'nextAvailable', { variantId: line.variantId, exclude: allUnitCodes(linesRef.current), count: want - have })
+        if (r.codes.length) setLinesSync((cur) => addCodes(cur, unitList.current, key, r.codes))
+        if (r.codes.length < want - have) {
+          const now = have + r.codes.length
+          toast(`${line.name}: only ${now} piece${now === 1 ? ' is' : 's are'} in stock, so the quantity is ${now}. Add stock (Products > Print label, or a purchase) to sell more.`, 'bad')
+        }
+      } catch (e) {
+        toast(errMsg(e), 'bad')
+      }
+    })
+  }
 
   /** Red warning for a unit scan that was NOT added (duplicate / sold / tracked product scanned without a unit code). */
   const warnUnit = useCallback((kind: 'duplicate' | 'unavailable' | 'tracked', msg: string, lineKey?: string | null) => {
@@ -472,9 +498,9 @@ export function PosScreen() {
                       </td>
                       <td>
                         <span className="pos-qty">
-                          <Button aria-label="Decrease quantity" disabled={l.tracked} title={l.tracked ? 'Units are added by scanning; remove a unit code instead' : undefined} onClick={() => patch(l.key, { qty: Math.max(1, l.qty - 1) })}>−</Button>
-                          <QtyField value={l.qty} readOnly={l.tracked} onCommit={(q) => patch(l.key, { qty: q })} onDone={focusScan} />
-                          <Button aria-label="Increase quantity" disabled={l.tracked || l.qty >= MAX_LINE_QTY} title={l.tracked ? 'Scan the next unit code to add it' : undefined} onClick={() => patch(l.key, { qty: Math.min(MAX_LINE_QTY, l.qty + 1) })}>+</Button>
+                          <Button aria-label="Decrease quantity" disabled={l.qty <= 1} title={l.tracked ? 'Takes off the label number added last' : undefined} onClick={() => (l.tracked ? changeUnitQty(l.key, (n) => n - 1) : patch(l.key, { qty: Math.max(1, l.qty - 1) }))}>−</Button>
+                          <QtyField value={l.qty} commitOnBlur={l.tracked} onCommit={(q) => (l.tracked ? changeUnitQty(l.key, () => q) : patch(l.key, { qty: q }))} onDone={focusScan} />
+                          <Button aria-label="Increase quantity" disabled={l.qty >= MAX_LINE_QTY} title={l.tracked ? 'Adds the next piece in stock (or scan its label)' : undefined} onClick={() => (l.tracked ? changeUnitQty(l.key, (n) => n + 1) : patch(l.key, { qty: Math.min(MAX_LINE_QTY, l.qty + 1) }))}>+</Button>
                         </span>
                       </td>
                       <td><DiscountField value={l.discount} disabled={!canDiscount} onChange={(d) => patch(l.key, { discount: d })} /></td>

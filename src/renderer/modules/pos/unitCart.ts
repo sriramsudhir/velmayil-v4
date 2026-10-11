@@ -57,6 +57,29 @@ export function removeUnit(lines: CartLine[], list: ScanList, key: string, code:
   })
 }
 
+/** "+" / a typed quantity on a tracked line: put these unit codes (chosen by the server) on the line. Codes already on the bill are skipped. */
+export function addCodes(lines: CartLine[], list: ScanList, key: string, codes: string[]): CartLine[] {
+  return lines.map((l) => {
+    if (l.key !== key) return l
+    const fresh = codes.map(normalizeUnitCode).filter((c) => list.tryAdd(c) === 'added')
+    if (!fresh.length) return l
+    const all = [...(l.unitCodes ?? []), ...fresh]
+    return { ...l, unitCodes: all, qty: all.length }
+  })
+}
+
+/** "-" / a smaller typed quantity on a tracked line: keep the first `keep` unit codes (at least one), release the others. */
+export function keepUnits(lines: CartLine[], list: ScanList, key: string, keep: number): CartLine[] {
+  return lines.map((l) => {
+    if (l.key !== key) return l
+    const all = l.unitCodes ?? []
+    const n = Math.max(1, Math.floor(keep))
+    if (n >= all.length) return l
+    for (const c of all.slice(n)) list.remove(c)
+    return { ...l, unitCodes: all.slice(0, n), qty: n }
+  })
+}
+
 /** Remove a whole line; its unit codes are released from the list. */
 export function removeLine(lines: CartLine[], list: ScanList, key: string): CartLine[] {
   const gone = lines.find((l) => l.key === key)
@@ -79,6 +102,9 @@ export function saleLinePayload(l: CartLine) {
 export function normalizeResumed(lines: CartLine[]): CartLine[] {
   return lines.map((l) => (l.tracked || l.unitCodes?.length ? { ...l, tracked: true, unitCodes: (l.unitCodes ?? []).map(normalizeUnitCode), qty: l.unitCodes?.length ?? l.qty } : l))
 }
+
+/** Most pieces one line with unit codes takes by "+" or a typed quantity (units.nextAvailable gives at most this many at a time). */
+export const MAX_UNIT_QTY = 1000
 
 /** Largest quantity one bill line may hold (same cap as the server). */
 export const MAX_LINE_QTY = 1_000_000

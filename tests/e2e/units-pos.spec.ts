@@ -216,8 +216,38 @@ test('01 scan unit 1 adds it; scanning it again warns "duplicate" and leaves the
   await expect.poll(unitChips).toEqual([codes[0], codes[1]])
   expect(await lineCount()).toBe(1)
   expect(await qtyOf()).toEqual([2])
-  await expect(page.getByRole('button', { name: 'Increase quantity' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Decrease quantity' })).toBeDisabled()
+  // "+" takes the next piece in stock (no scan needed), "-" releases the one added last, a typed quantity does both
+  const plus = page.getByRole('button', { name: 'Increase quantity' })
+  const minus = page.getByRole('button', { name: 'Decrease quantity' })
+  await expect(plus).toBeEnabled()
+  await plus.click()
+  await expect.poll(qtyOf).toEqual([3])
+  const three = await unitChips()
+  expect(three.slice(0, 2)).toEqual([codes[0], codes[1]])
+  expect(new Set(three).size).toBe(3)
+  // only 3 pieces exist: more clicks (even two quick ones) stay at 3 and say why
+  await plus.click()
+  await plus.click()
+  await expect(page.getByText(/only 3 pieces are in stock, so the quantity is 3/).first()).toBeVisible()
+  expect(await qtyOf()).toEqual([3])
+  expect(new Set(await unitChips()).size).toBe(3)
+  // a typed quantity above the stock ends at the stock too
+  await page.locator('.pos-cart').getByLabel('Quantity', { exact: true }).fill('12')
+  await page.locator('.pos-cart').getByLabel('Quantity', { exact: true }).press('Enter')
+  await page.waitForTimeout(400)
+  expect(await qtyOf()).toEqual([3])
+  const qtyBox = page.locator('.pos-cart').getByLabel('Quantity', { exact: true })
+  await qtyBox.fill('2')
+  await qtyBox.press('Enter')
+  await expect.poll(qtyOf).toEqual([2])
+  await expect.poll(unitChips).toEqual([codes[0], codes[1]])
+  await minus.click()
+  await expect.poll(unitChips).toEqual([codes[0]])
+  await expect(minus).toBeDisabled() // the last piece goes with the X of the line
+  // back to the two scanned pieces for the next steps
+  await scanBox().focus()
+  await scan(codes[1])
+  await expect.poll(unitChips).toEqual([codes[0], codes[1]])
 })
 
 test('02 removing one unit code releases it (it can be scanned again); a plain barcode still just increments', async () => {

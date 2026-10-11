@@ -182,6 +182,22 @@ export class UnitsService {
     return fill.length === qty - given.length ? [...given, ...fill.map((u) => u.code)] : null
   }
 
+  /**
+   * The next pieces of a tracked product that can still be sold, for "+" and a typed quantity on a bill line (the cashier does
+   * not have to scan every label). `exclude` = codes already on the bill. Pieces that never got a label of their own come first:
+   * taking one of those cannot disagree with a printed label on the shelf. `left` = pieces that would still be free afterwards.
+   */
+  nextAvailable(args: unknown): { codes: string[]; left: number } {
+    this.requireAny('pos.sell')
+    const a = parse(z.object({ variantId: id, exclude: z.array(z.string().trim().min(1).max(64)).max(10_000).optional(), count: z.number().int().min(1).max(1000).optional() }), args)
+    const skip = new Set((a.exclude ?? []).map(normalizeUnitCode))
+    const free = this.db
+      .all<{ code: string }>(`SELECT code FROM product_units WHERE variant_id = ? AND status IN ${AVAIL_SQL} ORDER BY (label_printed_at IS NOT NULL), seq, id`, a.variantId)
+      .filter((u) => !skip.has(u.code))
+    const codes = free.slice(0, a.count ?? 1).map((u) => u.code)
+    return { codes, left: free.length - codes.length }
+  }
+
   private bump(ids: number[]): void {
     this.enqueueUnits(ids)
   }

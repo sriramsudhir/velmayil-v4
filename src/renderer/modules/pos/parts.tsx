@@ -43,7 +43,11 @@ export function MoneyField({ value, onCommit, disabled, width = 90, title, id }:
  * Quantity of a bill line. The cashier can clear the box and type a new number: the line keeps its quantity until the text
  * is a whole number of at least 1 (an empty box or "0" never becomes quantity 1 behind the cashier's back, "1.5" is refused).
  */
-export function QtyField({ value, onCommit, readOnly, onDone }: { value: number; onCommit: (qty: number) => void; readOnly?: boolean; onDone?: () => void }) {
+export function QtyField({ value, onCommit, readOnly, onDone, commitOnBlur }: {
+  value: number; onCommit: (qty: number) => void; readOnly?: boolean; onDone?: () => void
+  /** Commit once, when the cashier leaves the box or presses Enter (a line with unit codes: "12" must not pass through quantity 1 on the way) */
+  commitOnBlur?: boolean
+}) {
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
   return (
@@ -54,9 +58,13 @@ export function QtyField({ value, onCommit, readOnly, onDone }: { value: number;
         if (!/^[\d,\s]*$/.test(t)) return // letters, minus, decimal point: not a quantity
         setText(t)
         const q = parseQtyText(t)
-        if (q != null && q !== value) onCommit(q)
+        if (!commitOnBlur && q != null && q !== value) onCommit(q)
       }}
-      onBlur={() => setText(String(value))}
+      onBlur={() => {
+        const q = parseQtyText(text)
+        setText(String(value))
+        if (commitOnBlur && q != null && q !== value) onCommit(q)
+      }}
       onFocus={(e) => e.target.select()}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); onDone?.() } }}
     />

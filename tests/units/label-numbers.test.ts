@@ -346,6 +346,39 @@ describe('billing with unique labels', () => {
   })
 })
 
+describe('quantity by "+" on the bill (units.nextAvailable)', () => {
+  it('names the next pieces in stock, skips the ones on the bill, unlabelled pieces first, and the sale goes through', async () => {
+    const p = await stockProduct(app, { qty: 5, barcode: '200000031' })
+    const [c1, c2] = await issue(app, p.variantId, 2) // 2 pieces with a printed label, 3 without
+    const all = availCodes(app, p.variantId)
+    expect(all).toHaveLength(5)
+    const unlabelled = all.filter((c) => c !== c1 && c !== c2)
+
+    // c1 was scanned; "+" twice
+    const one = await U(app, 'nextAvailable', { variantId: p.variantId, exclude: [c1] })
+    expect(one.codes).toEqual([unlabelled[0]])
+    expect(one.left).toBe(3)
+    const two = await U(app, 'nextAvailable', { variantId: p.variantId, exclude: [c1, ...one.codes] })
+    expect(two.codes).toEqual([unlabelled[1]])
+    // a typed quantity asks for several at once; more than there is gives what there is
+    const many = await U(app, 'nextAvailable', { variantId: p.variantId, exclude: [c1], count: 10 })
+    expect(many.codes).toEqual([...unlabelled, c2])
+    expect(many.left).toBe(0)
+
+    await cashSale(app, [{ variantId: p.variantId, qty: 3, unitCodes: [c1, ...one.codes, ...two.codes] }])
+    expect(stockAt(app, p.variantId)).toBe(2)
+    expect(statusOf(app, unlabelled[0])).toBe('sold')
+    // sold pieces are never offered again
+    expect((await U(app, 'nextAvailable', { variantId: p.variantId, count: 10 })).codes).toEqual([unlabelled[2], c2])
+    await assertInvariant(app)
+  })
+  it('nothing left: an empty answer, never an error', async () => {
+    const p = await stockProduct(app, { qty: 1 })
+    const [c1] = await issue(app, p.variantId, 1)
+    expect(await U(app, 'nextAvailable', { variantId: p.variantId, exclude: [c1] })).toEqual({ codes: [], left: 0 })
+  })
+})
+
 describe('old labels with the shared product barcode', () => {
   it('are accepted while unlabelled stock exists, consume one such piece per sale, and are refused afterwards', async () => {
     const p = await stockProduct(app, { qty: 3, barcode: '200000001' })
