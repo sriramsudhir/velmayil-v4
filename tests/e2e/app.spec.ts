@@ -203,7 +203,8 @@ test('03b Generate barcode -> label size dialog -> 50x25 preview shows the barco
   // saved on the variant right away
   expect((await call('catalog', 'get', { id: saved.id })).variants[0].barcode).toBe(digits)
   const frame = page.frameLocator('iframe[title="Label preview"]')
-  await expect(frame.locator('.code')).toHaveText(digits, { timeout: 15_000 })
+  // a stock-tracked product: every label carries its OWN 10-digit number (4-digit prefix + 6-digit suffix), not the shared product barcode
+  await expect(frame.locator('.code').first()).toHaveText(/^[1-9]\d{9}$/, { timeout: 15_000 })
   await expect(frame.locator('.pname')).toContainText('QA Label Item')
   await expect(frame.locator('.shop-name').first()).toContainText(/Sri Lakshmi|Velmayil/)
   await expect(frame.locator('svg.barcode')).toBeVisible()

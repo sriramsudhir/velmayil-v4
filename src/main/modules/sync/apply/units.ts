@@ -6,7 +6,11 @@ import { saleTombstoned } from './sales'
 /**
  * Inbound unit code (product_units). Idempotent by uuid.
  *
- * Multi-terminal strategy ("conflict reporting"): codes are PREFIX-NNNN from a per-prefix counter kept on each terminal. Applying a
+ * The code is taken as issued, in either spelling: a 10-digit label number (4-digit prefix + 6-digit suffix, e.g. 2000000190) or an
+ * older PREFIX-NNNN code; the database checks its shape (migration 910 widened the suffix to 999999).
+ *
+ * Multi-terminal strategy ("conflict reporting"): codes come from a per-prefix counter. With LAN sync only the admin system issues
+ * numbers (a client refuses, see UnitsService.canIssue); terminals that are not in client mode keep their own counter. Applying a
  * remote unit bumps the local counter (unit_sequences) to at least its suffix, so a terminal that is online keeps issuing fresh
  * numbers. Two terminals that generate the SAME prefix while offline can still pick the same suffix; when the second unit arrives
  * its code already exists under another uuid. That is detected here, logged to sync_conflicts (kind duplicate_key) and the local row
@@ -58,7 +62,10 @@ export function applyUnit(ctx: Ctx, input: Snapshot, op: 'upsert' | 'delete'): O
   const row = buildRow(ctx, snap)
   for (const col of ['sale_id', 'purchase_id']) if (snap.refs?.[col] && row[col] == null) throw new Deferred(`${snap.refs[col]!.table}:${snap.refs[col]!.uuid}`)
   if (snap.row.sale_item_id != null && row.sale_item_id == null && snap.refs?.sale_item_id) throw new Deferred(`sale_items:${snap.refs.sale_item_id.uuid}`)
-  const cols = ['status', 'sale_id', 'sale_item_id', 'purchase_id', 'location_id', 'void_reason', 'updated_at'].filter((c) => c in row)
+  // label_printed_at travels too (a label printed on the admin system stops the shared product barcode for that unit everywhere);
+  // a printed label is never "unprinted" again by a snapshot from a terminal that did not know about it yet
+  const cols = ['status', 'sale_id', 'sale_item_id', 'purchase_id', 'location_id', 'void_reason', 'label_printed_at', 'updated_at']
+    .filter((c) => c in row && info.cols.includes(c) && !(c === 'label_printed_at' && row[c] == null))
   db.run(`UPDATE product_units SET ${cols.map((c) => `${c} = ?`).join(',')} WHERE id = ?`, ...cols.map((c) => toSql(row[c])), existing.id)
   return 'applied'
 }

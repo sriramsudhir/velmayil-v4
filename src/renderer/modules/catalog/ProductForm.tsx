@@ -5,7 +5,7 @@ import { call, errMsg } from '@/lib/api'
 import { stripScanDecorations } from '@shared/scanCode'
 import { useScanner } from '@/lib/useScanner'
 import { LabelPrintDialog } from '@/modules/printing/LabelPrintDialog'
-import { MAX_UNIT_SEQ } from '@shared/scanList'
+import { maxSeqFor } from '@shared/scanList'
 import { UnitsPanel } from './UnitsPanel'
 import { capacityText, prefixError, sanitizePrefix } from './unitsModel'
 import { bpToPct, fileToBase64, parseRupees, rupees, GST_SLABS, type Brand, type Category, type ProductDetail } from './types'
@@ -75,7 +75,7 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
     call<Record<string, string>>('catalog', 'getSettings').then((s) => setNextBarcode(s.nextBarcode ?? '')).catch(() => setNextBarcode(''))
   }
   // once unit codes exist the prefix is locked (changing it would orphan printed labels), unless all 9999 are used
-  const prefixLocked = wasTracked && unitsUsed > 0 && unitsUsed < MAX_UNIT_SEQ
+  const prefixLocked = wasTracked && unitsUsed > 0 && unitsUsed < maxSeqFor(unitPrefix)
 
   const suggest = async (forName: string) => {
     if (!forName.trim()) return

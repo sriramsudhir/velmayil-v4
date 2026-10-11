@@ -118,7 +118,7 @@ export function ProductsTab({ categories, brands, reloadTaxonomy }: { categories
     { key: 'name', header: 'Product', render: (r) => <span>{r.name} {r.variantCount > 1 && <Badge>{r.variantCount} variants</Badge>}</span> },
     { key: 'sku', header: 'SKU' },
     { key: 'barcode', header: 'Barcode', render: (r) => r.barcode ?? <span className="muted">—</span> },
-    { key: 'trackUnits', header: 'Unit codes', render: (r) => (r.trackUnits ? <Badge tone="good">{r.unitPrefix ? `${r.unitPrefix}-NNNN` : 'tracked'}</Badge> : <span className="muted">—</span>) },
+    { key: 'trackUnits', header: 'Unit codes', render: (r) => (r.trackUnits ? <Badge tone="good">{r.unitPrefix ? (/^[1-9]\d{3}$/.test(r.unitPrefix) ? `${r.unitPrefix}000001…` : `${r.unitPrefix}-NNNN`) : 'tracked'}</Badge> : <span className="muted">—</span>) },
     { key: 'category', header: 'Category', render: (r) => r.category ?? '' },
     { key: 'gst', header: 'GST', align: 'right', render: (r) => `${bpToPct(r.taxRateBp)}%` },
     { key: 'price', header: 'Price', align: 'right', render: (r) => (r.variantCount > 1 && r.minPrice !== r.maxPrice ? `${formatINR(r.minPrice)} – ${formatINR(r.maxPrice)}` : formatINR(r.price)) },

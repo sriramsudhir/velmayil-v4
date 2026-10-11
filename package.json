@@ -1,7 +1,7 @@
 {
   "name": "velmayil-pos",
   "productName": "Velmayil POS",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Offline-first retail POS for Windows (fireworks & general retail)",
   "main": "out/main/index.js",
   "author": "Velmayil",

@@ -28,7 +28,10 @@ const lineSchema = z.object({
   /** absolute unit price in paise (same tax basis as catalog prices). Needs pos.price_override */
   unitPriceOverride: int.min(0).nullish(),
   lineDiscount: discountSchema,
-  /** unit codes (PREFIX-NNNN) of the physical units sold on this line: REQUIRED for track_units products (length === qty) */
+  /**
+   * unit codes (label numbers) of the physical units sold on this line. REQUIRED for track_units products; qty may exceed the
+   * codes only by pieces that never got a label of their own (billed by the shared product barcode, taken by the server).
+   */
   unitCodes: z.array(z.string().trim().min(1).max(64)).max(10_000).optional()
 })
 
@@ -325,8 +328,10 @@ export class PosService {
   /**
    * Resolve a scan. For a unit code (PREFIX-NNNN) `unit` is the object {id,code,status,variantId,saleId} (`unitOfMeasure` keeps 'pcs');
    * for an ordinary barcode `unit` stays the measure string and `trackUnits` says whether the UI must ask for a unit code.
+   * `unlabelledUnits` (tracked products only) = in-stock pieces that never got a label of their own: that many may still be
+   * billed by the shared product barcode (see UnitsService.unlabelledRows); 0 = every piece has its label, scan it.
    */
-  scan(code: string): ScanVariant {
+  scan(code: string): ScanVariant & { unlabelledUnits?: number } {
     this.app.requirePermission('pos.sell')
     // exact first, then scanner-variant spellings (UPC-A <-> EAN-13, stripped zeros / check digit, GS1 wrappers, SKU case ...)
     const v: ScanVariant | undefined = this.app.lookup.byScan(String(code ?? ''))
@@ -336,6 +341,7 @@ export class PosService {
     if (su && !isAvailable(su.status))
       throw new AppError('CONFLICT', statusMessage(su.code, su.status), { code: 'UNIT_NOT_AVAILABLE', status: su.status, unitCode: su.code })
     if (!v.active) throw new AppError('VALIDATION', `${v.displayName} is inactive and cannot be sold`)
+    if (v.trackUnits && !su && this.units) return { ...v, unlabelledUnits: this.units.unlabelledCount(v.variantId) }
     return v
   }
 
@@ -347,7 +353,8 @@ export class PosService {
   search(text: string, limit = 30): SellableVariant[] {
     this.app.requirePermission('pos.sell')
     if (!String(text ?? '').trim()) return []
-    return this.app.lookup.search(String(text), Math.min(limit, 100))
+    const units = this.units
+    return this.app.lookup.search(String(text), Math.min(limit, 100)).map((v) => (v.trackUnits && units ? { ...v, unlabelledUnits: units.unlabelledCount(v.variantId) } : v))
   }
 
   // ---------------------------------------------------------------- pricing

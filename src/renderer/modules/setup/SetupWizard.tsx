@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { Button, Card, Field, Input, TextArea, useToast } from '@/ui'
 import { call, errMsg } from '@/lib/api'
+import { ImportEverything } from '@/modules/backup/TransferPanel'
 
 // Owned by Agent 1. First-run setup: shop -> owner account -> POS & store location -> review. Logo is added later in Shop Profile.
 
@@ -57,6 +58,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   const [errors, setErrors] = useState<Errors>({})
   const [busy, setBusy] = useState(false)
   const [serverError, setServerError] = useState('')
+  const [importing, setImporting] = useState(false) // "Import everything" from a laptop that is already set up
   const root = useRef<HTMLFormElement>(null)
 
   const set = (k: keyof Form) => (ev: { target: { value: string } }) => {
@@ -187,6 +189,13 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             </div>
           </form>
         </Card>
+        {step === 0 && (
+          <p className="muted" style={{ textAlign: 'center', marginTop: 12 }}>
+            Already using this app on another laptop?{' '}
+            <Button type="button" variant="ghost" onClick={() => setImporting(true)}>Import everything from it</Button>
+          </p>
+        )}
+        {importing && <ImportEverything firstRun onClose={() => setImporting(false)} onDone={() => { setImporting(false); onDone() }} />}
       </div>
     </div>
   )

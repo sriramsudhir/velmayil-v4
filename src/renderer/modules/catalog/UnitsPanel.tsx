@@ -3,7 +3,7 @@ import { Badge, Button, Field, InlineAlert, Input, Modal, Select, Spinner, Table
 import { call } from '@/lib/api'
 import { useLiveRefresh } from '@/lib/live'
 import { useSession } from '@/lib/session'
-import { MAX_UNIT_SEQ } from '@shared/scanList'
+import { MAX_LABEL_SEQ } from '@shared/scanList'
 import { LabelPrintDialog } from '@/modules/printing/LabelPrintDialog'
 import {
   UNIT_STATUSES, UNIT_STATUS_LABEL, UNIT_STATUS_TONE, capacityText, generateRangeText, selectUnitsForPrint, unitErrorMessage, validateGenerateCount,
@@ -92,7 +92,7 @@ export function UnitsPanel({ open, onClose, productId, productName, prefix, vari
   const printed = useMemo(() => readPrinted(), [data, printCodes]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const generate = async () => {
-    const v = validateGenerateCount(genCount, used)
+    const v = validateGenerateCount(genCount, used, prefix)
     if (!v.ok) return setGenErr(v.message)
     setGenBusy(true)
     setGenErr(null)
@@ -110,12 +110,12 @@ export function UnitsPanel({ open, onClose, productId, productName, prefix, vari
 
   const fetchAll = async (): Promise<UnitRow[]> => {
     const rows: ListedUnit[] = []
-    for (let off = 0; off < MAX_UNIT_SEQ; off += 500) {
+    for (let off = 0; off < MAX_LABEL_SEQ; off += 500) {
       const r = await call<{ rows: ListedUnit[]; total: number }>('units', 'list', { variantId, limit: 500, offset: off })
       rows.push(...r.rows)
       if (rows.length >= r.total) break
     }
-    return rows.sort((a, b) => a.code.localeCompare(b.code)).map((u) => ({ ...u, printedAt: printed.has(u.code) ? 1 : null }))
+    return rows.sort((a, b) => a.code.localeCompare(b.code)).map((u) => ({ ...u, printedAt: printed.has(u.code) ? 1 : u.labelPrintedAt ?? null }))
   }
 
   const choosePrint = async () => {
@@ -176,7 +176,7 @@ export function UnitsPanel({ open, onClose, productId, productName, prefix, vari
               { key: 'status', header: 'Status', render: (r) => <Badge tone={UNIT_STATUS_TONE[r.status]}>{UNIT_STATUS_LABEL[r.status]}</Badge> },
               { key: 'invoiceNo', header: 'Sold on bill', render: (r) => r.invoiceNo ?? '' },
               { key: 'voidReason', header: 'Note', render: (r) => r.voidReason ?? '' },
-              { key: 'printed', header: 'Label', render: (r) => (printed.has(r.code) ? <span className="muted">printed</span> : <span className="muted">—</span>) }
+              { key: 'printed', header: 'Label', render: (r) => (printed.has(r.code) || r.labelPrintedAt ? <span className="muted">printed</span> : <span className="muted">—</span>) }
             ]}
           />
         )}

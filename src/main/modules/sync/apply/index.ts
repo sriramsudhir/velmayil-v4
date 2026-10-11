@@ -5,17 +5,22 @@ import { applyLogoAsset, applyProfileVersion } from './profile'
 import { applyStockMovement } from './stock'
 import { applyUnit } from './units'
 import { applySaleDelete, saleTombstoned } from './sales'
+import { applyShared } from '../shared'
+import { enforceProfile, noteProfile } from './authority'
 import type { RemoteChange } from '../protocol'
 
 export { Deferred } from './context'
 
-export type ApplyResult = { status: Outcome | 'ignored' } | { status: 'deferred'; missing: string }
+export type ApplyResult = { status: Outcome | 'ignored'; lostRemote?: boolean } | { status: 'deferred'; missing: string }
 
 /** Entities that are never applied from remote (credentials, local-only state, bookkeeping). */
 const IGNORED = new Set([
-  'users', 'roles', 'approvals', 'audit_log', 'settings', 'pos_terminals', 'locations', 'held_carts',
-  'print_templates', 'printer_profiles', 'print_log', 'invoice_sequences', 'stock_levels', 'sync_queue', 'backups'
+  'users', 'roles', 'approvals', 'audit_log', 'pos_terminals', 'locations', 'held_carts',
+  'printer_profiles', 'print_log', 'invoice_sequences', 'stock_levels', 'sync_queue', 'backups'
 ])
+
+/** Shop-wide configuration (shared.ts): accepted only by a Client, only from the Admin system. */
+const SHARED = new Set(['settings', 'print_templates'])
 
 /**
  * Apply ONE remote change atomically. The ONLY place where inbound sync writes syncable tables.
@@ -26,11 +31,17 @@ const IGNORED = new Set([
  *    bill or of its return notes are skipped
  */
 export function applyChange(app: App, change: RemoteChange): ApplyResult {
-  const ctx: Ctx = { app, db: app.db, change }
+  const r = app.setting('sync.role', 'standalone')
+  const role = r === 'admin' || r === 'client' ? r : 'standalone'
+  const ctx: Ctx = { app, db: app.db, change, role, authoritative: role === 'client' && change.fromAdmin === true }
   const snap = change.payload
   const table = snap?.table ?? change.entity
   if (!snap || typeof snap !== 'object') return { status: 'ignored' }
   if (IGNORED.has(change.entity) || !tableInfo(app.db, change.entity)) return { status: 'ignored' }
+  if (SHARED.has(change.entity)) {
+    if (!ctx.authoritative || snap.meta?.shared !== true || change.op !== 'upsert') return { status: 'ignored' }
+    return { status: app.db.transaction(() => applyShared(app, change.entity, snap)) }
+  }
   try {
     return app.db.transaction((): ApplyResult => {
       const q0 = app.db.value<number>('SELECT COALESCE(MAX(id),0) FROM sync_queue') ?? 0
@@ -40,7 +51,15 @@ export function applyChange(app: App, change: RemoteChange): ApplyResult {
           out = change.op === 'delete' ? 'skipped' : applyStockMovement(ctx, snap)
           break
         case 'business_profile_versions':
-          out = change.op === 'delete' ? 'skipped' : applyProfileVersion(ctx, snap)
+          if (change.op === 'delete') out = 'skipped'
+          else if (role === 'standalone') out = applyProfileVersion(ctx, snap)
+          else {
+            // the Admin system decides which shop profile is in use (authority.ts)
+            const existed = !!app.db.get('SELECT 1 FROM business_profile_versions WHERE uuid = ?', snap.uuid)
+            out = applyProfileVersion(ctx, snap)
+            noteProfile(ctx, snap, existed)
+            enforceProfile(app, role)
+          }
           break
         case 'logo_assets':
           out = applyLogoAsset(ctx, snap)
@@ -70,7 +89,7 @@ export function applyChange(app: App, change: RemoteChange): ApplyResult {
         "UPDATE sync_queue SET status = 'sent', sent_at = ?, last_error = 'echo-suppressed' WHERE id > ? AND status = 'pending'",
         Date.now(), q0
       )
-      return { status: out }
+      return { status: out, lostRemote: ctx.lostRemote }
     })
   } catch (e) {
     if (e instanceof Deferred) return { status: 'deferred', missing: e.missing }

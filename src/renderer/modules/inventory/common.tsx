@@ -130,6 +130,9 @@ export function ProductPicker({ onPick, placeholder = 'Scan barcode or search pr
           const r = await call<{ unit: { code: string; status: string }; variant: { sku: string } } | null>('units', 'resolve', { code })
           if (!r) {
             unitList.release(code)
+            // an all-digit code has the shape of a label number but may just as well be an ordinary product barcode
+            const exact = /^\d+$/.test(code) ? await call<Picked | null>('inventory', 'lookup', { code }) : null
+            if (exact) return pick(exact)
             beepError()
             toast(notFoundMessage(code), 'bad')
             return

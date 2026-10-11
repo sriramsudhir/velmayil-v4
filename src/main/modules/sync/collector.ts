@@ -4,6 +4,7 @@ import type { ChildSpec, Snapshot } from '../../core/snapshot'
 import { tableInfo } from './apply/context'
 import { saleDeletePayload, saleTombstones } from '../pos/service'
 import type { LogoPayload, SyncPayload } from './protocol'
+import { resetSharedSent } from './shared'
 
 /**
  * Columns that hold a local id but have no declared FOREIGN KEY (so snapshotRow cannot produce a ref for them).
@@ -136,6 +137,11 @@ const FULL: { table: string; children?: ChildSpec[] }[] = [
   { table: 'product_units' }
 ]
 
+/** Child tables that travel inside a top-level entity's snapshot (same shape resyncAll uses). */
+export function childrenFor(db: Db, table: string): ChildSpec[] {
+  return (FULL.find((f) => f.table === table)?.children ?? []).filter((c) => tableInfo(db, c.table))
+}
+
 /** Queue every syncable row again (new terminal joins, or after a server reset). Receivers are idempotent. */
 export function resyncAll(app: App): { queued: number } {
   const db = app.db
@@ -160,6 +166,7 @@ export function resyncAll(app: App): { queued: number } {
       }
     }
     db.run("INSERT INTO sync_state(key,value) VALUES ('moves_cursor','0') ON CONFLICT(key) DO UPDATE SET value = '0'")
+    resetSharedSent(app) // an Admin system sends its shop-wide settings and templates again as well
   })
   } finally {
     app.forceEnqueue = prev

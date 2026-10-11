@@ -15,7 +15,7 @@ import { serialScanner, serialSupported } from '@/lib/serialScanner'
 import { hidScanner, hidSupported } from '@/lib/hidScanner'
 import { BoxRecorder, noteBoxSubmit, scanBoxKey } from '@/lib/scanInput'
 import { createScanList, duplicateMessage, type ScanList } from '@shared/scanList'
-import { addUnit, classifyScan, clearDraft, MAX_LINE_QTY, isLocalDuplicate, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, TRACKED_HINT, unitInfoOf, type ScanResponse } from './unitCart'
+import { addUnit, classifyScan, clearDraft, MAX_LINE_QTY, isLocalDuplicate, legacyScanAllowed, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, TRACKED_HINT, unitInfoOf, type ScanResponse } from './unitCart'
 import type { Approval, CartCustomer, CartLine, PayMethod, PosSettings, SaleResult, SavedCart, Variant } from './types'
 import './pos.css'
 
@@ -143,7 +143,8 @@ export function PosScreen() {
       if (beep) beepOk()
       return true
     }
-    if (kind === 'tracked-product') { warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); return false }
+    // an old label with the shared product barcode: allowed only while pieces without a label of their own are left in stock
+    if (kind === 'tracked-product' && !legacyScanAllowed(linesRef.current, v, qty)) { warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); return false }
     addVariant(v as Variant, qty, !beep)
     return true
   }, [addVariant, setLinesSync, warnUnit])
@@ -254,7 +255,7 @@ export function PosScreen() {
     }
   }
   submitRef.current = () => { void submitScan() }
-  const pick = (v: Variant) => { if (v.trackUnits) warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); else addVariant(v); setText(''); setResults([]); setHi(-1); setNotFound(null); focusScan() }
+  const pick = (v: Variant) => { if (v.trackUnits && !legacyScanAllowed(linesRef.current, v, 1)) warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); else addVariant(v); setText(''); setResults([]); setHi(-1); setNotFound(null); focusScan() }
 
   // ---- barcode scanners (keyboard-wedge when focus is NOT in the scan box, serial / HID readers) go straight to the cart
   const scannerCfg = useScannerConfig()

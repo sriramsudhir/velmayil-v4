@@ -8,7 +8,8 @@ import { Button, Card, ErrorState, Field, Input, PageHeader, Select, Spinner, Ta
 import { ProductPicker, fmtDate, type Loc, type Page } from './common'
 
 interface TRow { id: number; number: string; createdAt: number; fromName: string; toName: string; lines: number; qty: number; note: string }
-interface Line { variantId: number; displayName: string; sku: string; qty: number; stock: number; tracked: boolean; unitCodes: string[] }
+/** tracked lines: qty = scanned unit codes + plainQty (pieces that never got a label of their own, moved by quantity) */
+interface Line { variantId: number; displayName: string; sku: string; qty: number; stock: number; tracked: boolean; unitCodes: string[]; plainQty?: number }
 
 export function TransfersPage() {
   const toast = useToast()
@@ -29,22 +30,30 @@ export function TransfersPage() {
 
   const add = async (p: { variantId: number; displayName: string; sku: string; trackUnits?: boolean }, unitCode?: string) => {
     const tracked = !!p.trackUnits || !!unitCode
-    if (tracked && !unitCode) {
-      beepError()
-      return toast(`${p.displayName} is moved by scanning each unit's code label (like ${p.sku.slice(0, 3)}-0001), not by quantity.`, 'bad')
-    }
     let stock = 0
+    let unlabelled = 0
     try {
-      const r = await call<{ qtyAtLocation: number } | null>('inventory', 'lookup', { code: p.sku, locationId: fromId })
+      const r = await call<{ qtyAtLocation: number; unlabelledUnits?: number } | null>('inventory', 'lookup', { code: p.sku, locationId: fromId })
       stock = r?.qtyAtLocation ?? 0
+      unlabelled = r?.unlabelledUnits ?? 0
     } catch { /* ignore */ }
+    // a tracked product picked without a unit code: only pieces that never got a label of their own can move by quantity
+    if (tracked && !unitCode && (lines.find((l) => l.variantId === p.variantId)?.plainQty ?? 0) + 1 > unlabelled) {
+      beepError()
+      return toast(`${p.displayName} is moved by scanning the label of each piece, not by quantity.`, 'bad')
+    }
     setLines((ls) => {
       const has = ls.some((l) => l.variantId === p.variantId)
       if (tracked) {
-        const code = normalizeUnitCode(unitCode!)
+        const code = unitCode ? normalizeUnitCode(unitCode) : null
+        const bump = (l: Line): Line => {
+          const codes = code ? [...l.unitCodes, code] : l.unitCodes
+          const plainQty = (l.plainQty ?? 0) + (code ? 0 : 1)
+          return { ...l, tracked: true, unitCodes: codes, plainQty, qty: codes.length + plainQty }
+        }
         return has
-          ? ls.map((l) => l.variantId === p.variantId ? { ...l, unitCodes: [...l.unitCodes, code], qty: l.unitCodes.length + 1 } : l)
-          : [...ls, { variantId: p.variantId, displayName: p.displayName, sku: p.sku, qty: 1, stock, tracked: true, unitCodes: [code] }]
+          ? ls.map((l) => l.variantId === p.variantId ? bump(l) : l)
+          : [...ls, bump({ variantId: p.variantId, displayName: p.displayName, sku: p.sku, qty: 0, stock, tracked: true, unitCodes: [], plainQty: 0 })]
       }
       return has ? ls.map((l) => l.variantId === p.variantId ? { ...l, qty: l.qty + 1 } : l) : [...ls, { variantId: p.variantId, displayName: p.displayName, sku: p.sku, qty: 1, stock, tracked: false, unitCodes: [] }]
     })
@@ -54,7 +63,8 @@ export function TransfersPage() {
     setLines((ls) => ls.flatMap((x) => {
       if (x.variantId !== l.variantId) return [x]
       const rest = x.unitCodes.filter((c) => c !== code)
-      return rest.length ? [{ ...x, unitCodes: rest, qty: rest.length }] : []
+      const qty = rest.length + (x.plainQty ?? 0)
+      return qty ? [{ ...x, unitCodes: rest, qty }] : []
     }))
   }
   const submit = async () => {
@@ -94,6 +104,7 @@ export function TransfersPage() {
                     {l.tracked && (
                       <div data-testid="transfer-unit-codes" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
                         {l.unitCodes.map((c) => <span key={c} className="badge">{c} <button type="button" className="btn btn-ghost" aria-label={`Remove ${c}`} onClick={() => dropUnit(l, c)}>✕</button></span>)}
+                        {!!l.plainQty && <span className="badge">{l.plainQty} without own label</span>}
                       </div>
                     )}
                   </>

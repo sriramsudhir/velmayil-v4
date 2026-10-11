@@ -106,7 +106,8 @@ export function CountSheetPage() {
     setScan('')
     const isUnit = isUnitCodeText(code)
     // ACTIVE-LIST RULE for unit codes: not on this count sheet yet -> count it; already scanned -> warn, never count twice
-    if (isUnit && units.claim(code) === 'duplicate') {
+    // (an all-digit text has the shape of a label number but can be an ordinary barcode, which is counted again on every scan)
+    if (isUnit && units.list.has(code)) {
       beepError()
       setLast({ ok: false, text: units.duplicateText(code) })
       scanRef.current?.focus()
@@ -114,7 +115,10 @@ export function CountSheetPage() {
     }
     try {
       const r = await call<{ displayName: string; countedQty: number; expectedQty: number; duplicate?: boolean; unexpected?: boolean; unit?: { code: string; status: string } }>('inventory', 'countScan', { countId: id, code })
-      if (isUnit) storeCodes(`count.${id}`, units.list.codes())
+      if (r.unit) {
+        units.claim(code)
+        storeCodes(`count.${id}`, units.list.codes())
+      }
       if (r.duplicate) {
         // the server already had this unit on the sheet (e.g. counted on another terminal): same rule, nothing was added
         beepError()
@@ -123,14 +127,13 @@ export function CountSheetPage() {
         beepError()
         setLast({ ok: false, text: `${normalizeUnitCode(code)} counted, but it is not expected at this location (${(r.unit?.status ?? 'unknown').replace('_', ' ')}). Check it.` })
       } else {
-        setLast({ ok: true, text: `${r.displayName}: counted ${r.countedQty} (expected ${r.expectedQty})${isUnit ? ` · ${normalizeUnitCode(code)}` : ''}` })
+        setLast({ ok: true, text: `${r.displayName}: counted ${r.countedQty} (expected ${r.expectedQty})${r.unit ? ` · ${normalizeUnitCode(code)}` : ''}` })
         beepOk()
       }
       reload()
     } catch (e) {
       beepError()
       if (isUnit) {
-        units.release(code) // it was not counted, so it may be scanned again
         const d = (e as { code?: string; details?: { code?: string } })
         if (d.details?.code === 'UNIT_DUPLICATE') units.claim(code) // the server already has it on the sheet
         setLast({ ok: false, text: d.details?.code === 'UNIT_DUPLICATE' ? units.duplicateText(code) : (d.code === 'NOT_FOUND' && /No product matches/.test(errMsg(e))) || d.details?.code === 'UNIT_NOT_FOUND' ? notFoundMessage(code) : errMsg(e) })

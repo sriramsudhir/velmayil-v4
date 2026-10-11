@@ -1,6 +1,6 @@
 import type { Snapshot } from '../../../core/snapshot'
 import { snapshotRow } from '../../../core/snapshot'
-import { Deferred, logConflict, tableInfo, toSql, type Ctx } from './context'
+import { ADMIN_OWNED, Deferred, locallyEdited, logConflict, tableInfo, toSql, type Ctx } from './context'
 import { resolveRef } from './refs'
 
 export type Outcome = 'applied' | 'skipped'
@@ -167,9 +167,15 @@ function applyLww(ctx: Ctx, snap: Snapshot, spec: TableSpec, op: 'upsert' | 'del
   const local = snapshotRow(db, t, existing.id)
   const lu = Number(local.row.updated_at ?? 0)
   const ru = Number(snap.row.updated_at ?? 0)
-  const remoteWins = ru !== lu ? ru > lu : portable(snap) > portable(local)
+  // LAN roles: the Admin system is the authority for the catalog, so on a Client its copy wins regardless of timestamps
+  // (two laptops without internet have no common clock)
+  const forced = !!ctx.authoritative && ADMIN_OWNED.has(t)
+  const remoteWins = forced ? true : ru !== lu ? ru > lu : portable(snap) > portable(local)
   if (!remoteWins) {
-    if (portable(snap) !== portable(local)) logConflict(ctx, 'lww_lost_remote', t, snap.uuid, local.row, snap.row, 'Local copy is newer; remote edit ignored')
+    if (portable(snap) !== portable(local)) {
+      ctx.lostRemote = true
+      logConflict(ctx, 'lww_lost_remote', t, snap.uuid, local.row, snap.row, 'Local copy is newer; remote edit ignored')
+    }
     return 'skipped'
   }
   try {
@@ -182,7 +188,11 @@ function applyLww(ctx: Ctx, snap: Snapshot, spec: TableSpec, op: 'upsert' | 'del
     logConflict(ctx, 'duplicate_key', t, snap.uuid, local.row, snap.row, `Remote edit collides with a unique value (${(e as Error).message}); kept local`)
     return 'skipped'
   }
-  if (portable(snap) !== portable(local)) logConflict(ctx, 'lww_lost_local', t, snap.uuid, local.row, snap.row, 'Remote edit is newer; local edit overwritten')
+  // Standalone (legacy) terminals list every overwritten copy; Admin / Client terminals only when this terminal had
+  // edited the record itself - otherwise every price change made on the Admin would show up as a "conflict" on the Client.
+  if (portable(snap) !== portable(local) && (!ctx.role || ctx.role === 'standalone' || locallyEdited(ctx))) {
+    logConflict(ctx, 'lww_lost_local', t, snap.uuid, local.row, snap.row, forced ? 'The Admin system decides catalog and prices; local edit overwritten' : 'Remote edit is newer; local edit overwritten')
+  }
   return 'applied'
 }
 

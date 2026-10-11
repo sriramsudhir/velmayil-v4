@@ -312,5 +312,9 @@ export function coalesceChanges(app: App, ms: number, sink: (events: ChangeEvent
 }
 
 /** Methods callable without a signed-in session (login screen, first-run setup status). */
-const PUBLIC = new Set(['auth.login', 'auth.current', 'auth.logout', 'setup.status', 'setup.complete', 'app.info'])
+const PUBLIC = new Set([
+  'auth.login', 'auth.current', 'auth.logout', 'setup.status', 'setup.complete', 'app.info',
+  // "Import everything" on a brand-new installation: each of these refuses unless no user exists yet or the caller is an Owner (modules/transfer)
+  'transfer.target', 'transfer.pickFile', 'transfer.inspect', 'transfer.import'
+])
 const isPublic = (service: string, method: string) => PUBLIC.has(`${service}.${method}`)

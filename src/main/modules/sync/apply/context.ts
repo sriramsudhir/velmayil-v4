@@ -13,6 +13,26 @@ export interface Ctx {
   app: App
   db: Db
   change: RemoteChange
+  /** this terminal's sync.role */
+  role?: 'standalone' | 'admin' | 'client'
+  /** Client applying a change of the Admin system: the Admin's catalog always wins, whatever the clocks say */
+  authoritative?: boolean
+  /** set by the engine when a remote edit lost against a different local copy (the Admin then sends its copy back) */
+  lostRemote?: boolean
+}
+
+/** Catalog tables for which the Admin system is the authority. */
+export const ADMIN_OWNED = new Set(['categories', 'brands', 'products', 'product_variants'])
+
+/**
+ * Has THIS terminal edited the record the change is about (a queued change of its own, not an echo of a remote one)?
+ * Used so that an ordinary update from another terminal is not listed as a "conflict" on a terminal that never touched it.
+ */
+export function locallyEdited(ctx: Ctx): boolean {
+  return !!ctx.db.get(
+    "SELECT 1 FROM sync_queue WHERE entity = ? AND entity_uuid = ? AND COALESCE(last_error,'') <> 'echo-suppressed' LIMIT 1",
+    ctx.change.entity, ctx.change.entityUuid ?? ''
+  )
 }
 
 export interface TableInfo {

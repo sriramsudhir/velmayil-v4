@@ -355,7 +355,9 @@ export class PurchasesService {
         const v = this.app.lookup.byId(it.variantId)
         if (!v) throw new AppError('NOT_FOUND', `Product variant ${it.variantId} not found`)
         if (!v.trackStock) throw new AppError('VALIDATION', `${v.displayName} does not track stock`)
-        if (v.trackUnits && it.unitCodes?.length !== it.qty)
+        // pieces without a label of their own (label printing switched tracking on) need no code: they complete the list
+        const outCodes = v.trackUnits && this.units ? this.units.completeCodes(v.variantId, it.qty, it.unitCodes, loc) : it.unitCodes
+        if (v.trackUnits && outCodes?.length !== it.qty)
           throw new AppError('VALIDATION', `${v.displayName}: scan the ${it.qty} unit code(s) being returned to the supplier`, { code: 'UNIT_CODES_REQUIRED', variantId: v.variantId, qty: it.qty })
         if (!v.trackUnits && it.unitCodes?.length) throw new AppError('VALIDATION', `${v.displayName} does not track unit codes`, { code: 'UNIT_NOT_TRACKED' })
         const unitCost = it.unitCost ?? v.cost
@@ -363,7 +365,7 @@ export class PurchasesService {
         // otherwise a fully returned purchase would leave its tax as a payable forever
         const rate = it.taxRateBp ?? this.returnTaxRate(a.supplierId, it.variantId, v.taxRateBp)
         const base = it.qty * unitCost
-        return { ...it, v, unitCost, rate, tax: pctOf(base, rate), base }
+        return { ...it, unitCodes: outCodes ?? it.unitCodes, v, unitCost, rate, tax: pctOf(base, rate), base }
       })
       const tax = lines.reduce((s, l) => s + l.tax, 0)
       const total = lines.reduce((s, l) => s + l.base, 0) + tax

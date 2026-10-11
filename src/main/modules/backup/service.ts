@@ -55,6 +55,18 @@ export interface RestoreResult {
   migrationsRun: number[]
 }
 
+/** Optional extras for restore() used by modules/transfer ("Import everything"); a plain restore passes none. */
+export interface RestoreHooks {
+  /** Runs inside the restore transaction after all tables were replaced; throwing rolls the whole restore back. */
+  beforeCommit?: () => void
+  safetyNote?: string
+  auditAction?: string
+  auditNote?: string
+  auditEntityId?: string
+  /** path shown in the audit entry instead of the (temporary) file that was restored */
+  auditSource?: string
+}
+
 const parse = <T extends z.ZodType>(schema: T, args: unknown): z.infer<T> => {
   const r = schema.safeParse(args ?? {})
   if (!r.success) throw new AppError('VALIDATION', r.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; '))
@@ -62,7 +74,7 @@ const parse = <T extends z.ZodType>(schema: T, args: unknown): z.infer<T> => {
 }
 
 const stamp = (t: number): string => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
-const appVersion = (): string => process.env.VELMAYIL_VERSION ?? process.env.npm_package_version ?? '1.0.11'
+export const appVersion = (): string => process.env.VELMAYIL_VERSION ?? process.env.npm_package_version ?? '1.0.12'
 
 /** Tables whose live content is kept as-is during restore (history of the backups themselves, schema bookkeeping). */
 const KEEP_ON_RESTORE = new Set(['backups', 'schema_migrations'])
@@ -406,7 +418,7 @@ export class BackupService {
    * connection. Steps: validate (manifest, sha256, integrity, FK, counts) on a private copy -> refuse newer schema ->
    * safety backup of the current DB -> swap -> foreign_key_check -> commit (any failure rolls everything back).
    */
-  restore(opts: { id?: number; path?: string }): RestoreResult {
+  restore(opts: { id?: number; path?: string } & RestoreHooks): RestoreResult {
     if (this.busy) throw new AppError('CONFLICT', 'Another backup or restore is already running')
     const src = opts.id != null ? this.rowOrThrow(opts.id).path : opts.path
     if (!src) throw new AppError('VALIDATION', 'id or path required')
@@ -435,7 +447,7 @@ export class BackupService {
       this.busy = false // allow the nested safety backup
       let safety: CreateResult
       try {
-        safety = this.create({ kind: 'safety', note: 'Automatic safety backup before restore' })
+        safety = this.create({ kind: 'safety', note: opts.safetyNote ?? 'Automatic safety backup before restore' })
       } finally {
         this.busy = true
       }
@@ -471,9 +483,12 @@ export class BackupService {
           const bad = db.all('PRAGMA main.foreign_key_check')
           if (bad.length) throw new Error(`Restored data has ${bad.length} foreign key violation(s)`)
           db.run(
-            "INSERT INTO audit_log(user_id,user_name,entity,entity_id,action,new_json,note) VALUES (?,?,'backup',?,'restore',?,?)",
-            this.app.session?.userId ?? null, this.app.session?.name ?? null, basename(src), JSON.stringify({ src, manifest, safetyBackup: safety.path }), 'Database restored from backup'
+            "INSERT INTO audit_log(user_id,user_name,entity,entity_id,action,new_json,note) VALUES (?,?,'backup',?,?,?,?)",
+            this.app.session?.userId ?? null, this.app.session?.name ?? null, opts.auditEntityId ?? basename(src), opts.auditAction ?? 'restore',
+            JSON.stringify({ src: opts.auditSource ?? src, manifest, safetyBackup: safety.path }), opts.auditNote ?? 'Database restored from backup'
           )
+          // last word before COMMIT: a caller (e.g. "Import everything") may compare the result and throw to roll everything back
+          opts.beforeCommit?.()
         })
       } finally {
         db.exec('PRAGMA foreign_keys = ON')
@@ -482,6 +497,12 @@ export class BackupService {
       attached = false
 
       const migrationsRun = runMigrations(db)
+      // logo bytes are cached by asset id for the life of the process; after a restore the same id can be another image
+      try {
+        if (this.app.has('businessProfile')) (this.app.get<{ logoCache?: Map<number, unknown> }>('businessProfile')).logoCache?.clear()
+      } catch {
+        /* best effort */
+      }
       let relogin = false
       const sess = this.app.session
       if (sess && !db.get('SELECT 1 FROM users WHERE id = ? AND username = ? AND active = 1', sess.userId, sess.username)) {

@@ -26,6 +26,9 @@ function AdjustForm({ target, locations, locationId, onClose, onDone }: { target
   const [note, setNote] = useState('')
   const [loc, setLoc] = useState<number | undefined>(locationId)
   const [busy, setBusy] = useState(false)
+  /** unit-coded product: the server asked for the label numbers of the pieces being removed (pieces without a label need none) */
+  const [needCodes, setNeedCodes] = useState<string | null>(null)
+  const [codes, setCodes] = useState('')
   const toast = useToast()
   const allowed = REASONS.filter((r) => r.dir === 'both' || r.dir === dir)
   const n = Number(qty.trim().replace(/,/g, ''))
@@ -34,11 +37,15 @@ function AdjustForm({ target, locations, locationId, onClose, onDone }: { target
     if (busy || !valid) return
     setBusy(true)
     try {
-      await call('inventory', 'adjust', { variantId: target.variantId, locationId: loc ?? locationId, delta: dir === 'out' ? -n : n, reason, note: note || undefined })
+      const unitCodes = dir === 'out' ? codes.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean) : []
+      await call('inventory', 'adjust', { variantId: target.variantId, locationId: loc ?? locationId, delta: dir === 'out' ? -n : n, reason, note: note || undefined, ...(unitCodes.length ? { unitCodes } : {}) })
       toast('Stock adjusted', 'good')
       onDone()
       onClose()
-    } catch (e) { toast(errMsg(e), 'bad') } finally { setBusy(false) }
+    } catch (e) {
+      if ((e as { details?: { code?: string } })?.details?.code === 'UNIT_CODES_REQUIRED') setNeedCodes(errMsg(e))
+      toast(errMsg(e), 'bad')
+    } finally { setBusy(false) }
   }
   return (
     <Modal title={`Adjust stock: ${target.displayName}`} open onClose={onClose} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!valid || busy} onClick={save}>Save adjustment</Button></>}>
@@ -57,6 +64,11 @@ function AdjustForm({ target, locations, locationId, onClose, onDone }: { target
         {locations.length > 1 && (
           <Field label="Location">
             <Select value={loc ?? locationId ?? ''} onChange={(e) => setLoc(Number(e.target.value))}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
+          </Field>
+        )}
+        {needCodes && dir === 'out' && (
+          <Field label="Label numbers of the pieces being removed" hint="Scan or type the label of each labelled piece (one per line). Pieces that never got a label of their own need no number.">
+            <TextArea rows={3} value={codes} onChange={(e) => setCodes(e.target.value)} aria-label="Label numbers being removed" />
           </Field>
         )}
         <Field label="Note"><TextArea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>

@@ -108,7 +108,7 @@ export function BackupPanel() {
       </Card>
 
       <Card title="Restore from a file">
-        <p className="muted">Use this after re-installing or moving to a new computer. Paste the full path of a <code>.vbak</code> file (its <code>.vbak.json</code> manifest must be next to it).</p>
+        <p className="muted">Use this after re-installing, or when a new computer <strong>replaces</strong> this one. To set up an <strong>additional</strong> laptop that works alongside this one, use the “Set up another laptop” tab instead (a restored backup would make both laptops pretend to be the same counter). Paste the full path of a <code>.vbak</code> file (its <code>.vbak.json</code> manifest must be next to it).</p>
         <div className="row" style={{ gap: 8 }}>
           <Input style={{ flex: 1 }} placeholder="C:\Backups\velmayil-POS-01-20260101-120000-manual.vbak" value={manualPath} onChange={(e) => setManualPath(e.target.value)} />
           <Button variant="danger" disabled={!manualPath.trim()} onClick={() => setRestoreTarget({ path: manualPath.trim(), label: manualPath.trim() })}>Restore…</Button>

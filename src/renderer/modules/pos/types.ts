@@ -19,6 +19,8 @@ export interface Variant {
   stock: number
   /** present when the variant is tracked per unit (units.* backend) */
   trackUnits?: boolean
+  /** tracked products: in-stock pieces that never got a label of their own (may still be billed by the shared barcode) */
+  unlabelledUnits?: number
 }
 
 export interface CartLine {

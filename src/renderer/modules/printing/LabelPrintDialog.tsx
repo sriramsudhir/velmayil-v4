@@ -8,6 +8,9 @@ import {
 } from '@shared/labelSizes'
 import { PrintPreview } from './PrintPreview'
 import type { PrintResult, Rendered, TemplateRow } from './shared'
+import {
+  MAX_LABELS_PER_RUN, chunk, codeRangeText, shortfallExtra, shortfallLines, shortfallsOf, splitPlans, type IssuedLabels, type LabelPlan, type Shortfall
+} from './labelJob'
 
 const STORE = 'pos.labelPrint.v1'
 interface Saved { choice: LabelChoice; options: LabelOptions }
@@ -37,8 +40,16 @@ const OPTION_LABELS: [keyof LabelOptions, string][] = [
 ]
 
 /**
- * "Print barcode label": asks the label size + copies, shows a live, accurate preview (real product, real shop profile,
- * barcode, MRP, price) and prints / saves a PDF. Printing problems never lose anything: the barcode is already saved.
+ * "Print barcode label": asks the label size + number of labels, shows a live, accurate preview (real product, real shop profile,
+ * barcode, MRP, price) and prints / saves a PDF.
+ *
+ * Product mode (`variantIds`): every label of a stock-tracked product gets its OWN number (same 4-digit prefix, the 6-digit suffix
+ * counts up by one per label, see shared/scanList.ts). The numbers are issued by `units.issueLabels` in one database transaction at the moment
+ * Print / Save PDF is pressed and are never issued again; a failed print is retried with the SAME numbers. Asking for more labels
+ * than there are unlabelled pieces in stock is refused until the user confirms receiving the extra pieces into stock.
+ * Products that do not track stock keep the shared product barcode.
+ *
+ * Unit mode (`unitCodes`, or "Reprint a damaged label"): prints EXISTING numbers again (`units.reprintLabels`); never a new one.
  */
 export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1, heading, barcode, unitCodes, unitVariantId, onPrinted }: {
   open: boolean
@@ -48,7 +59,7 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
   heading?: string
   /** Shown above the preview (the barcode that was just generated). */
   barcode?: string
-  /** Unit labels: print one Code 128 label per unique unit code (PREFIX-NNNN) instead of the product barcode. */
+  /** Unit labels: print one Code 128 label per EXISTING unit code / label number (a reprint; no new number is created). */
   unitCodes?: string[]
   /** Product (variant) all `unitCodes` belong to; omitted = the server looks each code up. */
   unitVariantId?: number
@@ -70,6 +81,19 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
   /** Barcode problems found in the WHOLE job (the preview only shows the first label); printing waits for "Print anyway". */
   const [jobWarnings, setJobWarnings] = useState<string[] | null>(null)
   const seq = useRef(0)
+  /** which button asked last (the stock question is answered for that action) */
+  const lastAction = useRef<'print' | 'pdf'>('print')
+  /** product mode: what printing will do per variant (unique numbers or shared barcode), loaded when the dialog opens */
+  const [plans, setPlans] = useState<LabelPlan[] | null>(null)
+  const [planErr, setPlanErr] = useState<string | null>(null)
+  /** product mode: the numbers issued for THIS job. Once set they are printed as they are (retry / PDF never issue again). */
+  const [issued, setIssued] = useState<IssuedLabels[] | null>(null)
+  /** product mode: more labels asked for than unlabelled pieces in stock; waits for the user's decision */
+  const [shortfall, setShortfall] = useState<Shortfall[] | null>(null)
+  /** "Reprint a damaged label": existing numbers typed / scanned here are printed again instead of new ones */
+  const [reprint, setReprint] = useState<string[]>([])
+  const [reprintText, setReprintText] = useState('')
+  const [reprintErr, setReprintErr] = useState<string | null>(null)
 
   // initial choice: this user's last choice, else the shop's label template
   useEffect(() => {
@@ -78,6 +102,11 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
     setFailure(null)
     setNotice(null)
     setJobWarnings(null)
+    setIssued(null)
+    setShortfall(null)
+    setReprint([])
+    setReprintText('')
+    setReprintErr(null)
     setCopies(String(initialCopies))
     const saved = readSaved(userId)
     if (saved) {
@@ -96,15 +125,44 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
       .finally(() => setReady(true))
   }, [open, userId, initialCopies])
 
-  useEffect(() => { setJobWarnings(null) }, [choice, options, copies])
+  useEffect(() => { setJobWarnings(null); setShortfall(null) }, [choice, options, copies])
+
+  // product mode: ask the server what each product's labels will carry (nothing is reserved by this)
+  const variantKey = variantIds.join(',')
+  useEffect(() => {
+    if (!open || !variantIds.length) { setPlans(null); setPlanErr(null); return }
+    let live = true
+    setPlans(null)
+    setPlanErr(null)
+    void (async () => {
+      try {
+        const out: LabelPlan[] = []
+        for (const variantId of variantIds) out.push(await call<LabelPlan>('units', 'labelPlan', { variantId }))
+        if (live) setPlans(out)
+      } catch (e) {
+        if (live) setPlanErr(errMsg(e))
+      }
+    })()
+    return () => { live = false }
+  }, [open, variantKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const size = useMemo(() => resolveLabelSize(choice), [choice])
   const page = pageSizeOf(size)
   const config = useMemo(() => labelConfigFor(size, options), [size, options])
   const n = Math.max(1, Math.min(500, Math.floor(Number(copies) || 1)))
-  const unitMode = !!unitCodes && unitCodes.length > 0
-  const itemCount = unitMode ? unitCodes!.length : variantIds.length
+  const reprinting = reprint.length > 0
+  const existingCodes = unitCodes && unitCodes.length > 0 ? unitCodes : reprint
+  const unitMode = existingCodes.length > 0
+  const itemCount = unitMode ? existingCodes.length : variantIds.length
   const total = n * itemCount
-  const unitReq = (codes: string[], copiesEach: number) => ({ unitCodes: codes, ...(unitVariantId != null ? { variantId: unitVariantId } : {}), copies: copiesEach })
+  const unitReq = (codes: string[], copiesEach: number) => ({ unitCodes: codes, ...(unitVariantId != null && !reprinting ? { variantId: unitVariantId } : {}), copies: copiesEach })
+  const split = useMemo(() => splitPlans(variantIds, plans), [variantKey, plans]) // eslint-disable-line react-hooks/exhaustive-deps
+  const firstPlan = plans?.find((p) => p.variantId === variantIds[0]) ?? null
+  const blocked = !unitMode ? plans?.find((p) => p.mode === 'unique' && p.blocked)?.blocked ?? null : null
+  const canReceive = !!plans?.some((p) => p.canReceive)
+  /** product mode waits for the plans: without them it is not known whether a label needs its own number */
+  const planning = !unitMode && variantIds.length > 0 && !plans
+  const issuedCodes = (issued ?? []).flatMap((i) => i.codes)
   // the server renders at most 2000 labels per call: split bigger jobs into runs
   const runSize = Math.max(1, Math.floor(2000 / n))
   const customBad =
@@ -116,27 +174,88 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
 
   // live preview from the real product (first one), shop profile and logo
   useEffect(() => {
-    if (!open || !ready || customBad || (!variantIds.length && !unitMode)) return
+    if (!open || !ready || customBad || (!variantIds.length && !unitMode) || planning) return
     const mine = ++seq.current
     const t = setTimeout(async () => {
       try {
         const perPage = size.sheet ? size.sheet.cols * size.sheet.rows : 1
-        const r = await call<Rendered>('printing', 'renderLabelHtml', unitMode
-          ? { template: 'label_barcode', ...unitReq(unitCodes!.slice(0, perPage), Math.min(n, perPage)), config }
-          : { template: 'label_barcode', variantIds: [{ variantId: variantIds[0], copies: Math.min(n, perPage) }], config })
+        let req: Record<string, unknown>
+        if (unitMode) req = { template: 'label_barcode', ...unitReq(existingCodes.slice(0, perPage), Math.min(n, perPage)), config }
+        else if (firstPlan?.mode === 'unique') {
+          // the numbers this job will carry: the ones already issued, else a preview of the next ones (nothing is reserved)
+          const mineIssued = issued?.find((i) => i.variantId === variantIds[0])?.codes
+          const codes = mineIssued ?? (await call<LabelPlan>('units', 'labelPlan', { variantId: variantIds[0], count: Math.min(n, perPage, 60) })).previewCodes
+          if (!codes.length) throw new Error(firstPlan.blocked ?? 'No label number is available for this product')
+          req = { template: 'label_barcode', unitCodes: codes.slice(0, Math.min(n, perPage)), variantId: variantIds[0], copies: 1, config }
+        } else req = { template: 'label_barcode', variantIds: [{ variantId: variantIds[0], copies: Math.min(n, perPage) }], config }
+        const r = await call<Rendered>('printing', 'renderLabelHtml', req)
         if (mine === seq.current) { setPreview(r); setPreviewErr(null) }
       } catch (e) {
         if (mine === seq.current) { setPreview(null); setPreviewErr(errMsg(e)) }
       }
     }, 150)
     return () => clearTimeout(t)
-  }, [open, ready, customBad, variantIds, unitCodes, unitVariantId, config, n, size])
+  }, [open, ready, customBad, variantKey, existingCodes.join(','), unitVariantId, config, n, size, planning, firstPlan?.mode, issued]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renderRuns = async (): Promise<Rendered[]> => {
-    if (!unitMode) return [await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', variantIds: variantIds.map((variantId) => ({ variantId, copies: n })), config })]
+  /** Barcode problems of the job, found BEFORE any number is issued (one sample label per product). */
+  const precheck = async (): Promise<string[]> => {
+    if (unitMode || issued) return []
+    const found: string[] = []
+    for (const p of plans ?? []) {
+      if (p.mode !== 'unique' || !p.previewCodes.length) continue
+      const r = await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', unitCodes: [p.previewCodes[0]], variantId: p.variantId, copies: 1, config })
+      found.push(...(r.warnings ?? []))
+    }
+    return [...new Set(found)]
+  }
+
+  /**
+   * The pages of this job. Product mode issues the label numbers here (once: a retry / the PDF reuse them).
+   * Returns null when the server asks for a decision first (more labels than unlabelled stock).
+   */
+  const renderRuns = async (receiveExtra = false): Promise<Rendered[] | null> => {
     const runs: Rendered[] = []
-    for (let i = 0; i < unitCodes!.length; i += runSize) runs.push(await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', ...unitReq(unitCodes!.slice(i, i + runSize), n), config }))
+    if (unitMode) {
+      // existing numbers: recorded as printed, never a new number
+      await call('units', 'reprintLabels', { codes: existingCodes })
+      for (let i = 0; i < existingCodes.length; i += runSize) runs.push(await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', ...unitReq(existingCodes.slice(i, i + runSize), n), config }))
+      return runs
+    }
+    let mine = issued
+    if (!mine && split.unique.length) {
+      try {
+        mine = (await call<{ items: IssuedLabels[] }>('units', 'issueLabels', { items: split.unique.map((variantId) => ({ variantId, count: n })), receiveExtra })).items
+      } catch (e) {
+        const short = shortfallsOf(e)
+        if (!short) throw e
+        setShortfall(short)
+        return null
+      }
+      setIssued(mine)
+      setShortfall(null)
+    }
+    // one label per number (the server finds each number's product)
+    for (const codes of chunk((mine ?? []).flatMap((i) => i.codes), MAX_LABELS_PER_RUN))
+      runs.push(await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', unitCodes: codes, copies: 1, config }))
+    if (split.shared.length)
+      runs.push(await call<Rendered>('printing', 'renderLabelHtml', { template: 'label_barcode', variantIds: split.shared.map((variantId) => ({ variantId, copies: n })), config }))
     return runs
+  }
+
+  const addReprint = async () => {
+    const code = reprintText.trim().toUpperCase()
+    if (!code) return
+    setReprintErr(null)
+    try {
+      const r = await call<{ unit: { code: string; status: string } } | null>('units', 'resolve', { code })
+      if (!r) return setReprintErr(`Label number ${code} does not exist. A reprint never creates a new number.`)
+      if (r.unit.status === 'void') return setReprintErr(`Label number ${r.unit.code} is void and cannot be printed again.`)
+      setReprint((cur) => (cur.includes(r.unit.code) ? cur : [...cur, r.unit.code]))
+      setReprintText('')
+      setCopies('1')
+    } catch (e) {
+      setReprintErr(errMsg(e))
+    }
   }
 
   const remember = async () => {
@@ -149,14 +268,21 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
     }
   }
 
-  const doPrint = async (anyway = false) => {
+  const doPrint = async (anyway = false, receiveExtra = false) => {
     if (customBad) return
+    lastAction.current = 'print'
     setBusy('print')
     setFailure(null)
     setNotice(null)
     try {
-      const runs = await renderRuns()
-      // a code that does not fit this label would print without bars: say so and let the user choose first
+      // a code that does not fit this label would print without bars: say so and let the user choose BEFORE numbers are issued
+      const early = anyway ? [] : await precheck()
+      if (early.length) {
+        setJobWarnings(early)
+        return
+      }
+      const runs = await renderRuns(receiveExtra)
+      if (!runs) return
       const found = [...new Set(runs.flatMap((r) => r.warnings ?? []))]
       if (found.length && !anyway) {
         setJobWarnings(found)
@@ -167,7 +293,7 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
       let warning: string | undefined
       for (const r of runs) {
         res = await call<PrintResult>('printing', 'print', {
-          html: r.html, paper: size.sheet ? 'A4' : 'label', widthMm: page.widthMm, heightMm: page.heightMm, docRef: `${unitMode ? 'unit-labels' : 'labels'}-${total}`
+          html: r.html, paper: size.sheet ? 'A4' : 'label', widthMm: page.widthMm, heightMm: page.heightMm, docRef: `${unitMode || split.unique.length ? 'unit-labels' : 'labels'}-${total}`
         })
         if (!res.ok) break
         warning = res.warning ?? warning
@@ -185,17 +311,26 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
     }
   }
 
-  const doPdf = async () => {
+  const doPdf = async (receiveExtra = false) => {
     if (customBad) return
+    lastAction.current = 'pdf'
     setBusy('pdf')
     setNotice(null)
     try {
-      const r = (await renderRuns())[0]
-      const out = await call<{ path: string }>('printing', 'exportPdf', {
-        html: r.html, path: `labels-${size.id}.pdf`, paper: size.sheet ? 'A4' : 'label', widthMm: page.widthMm, heightMm: page.heightMm, name: `labels-${size.id}`
-      })
+      const runs = await renderRuns(receiveExtra)
+      if (!runs) return
+      const paths: string[] = []
+      for (const [i, r] of runs.entries()) {
+        // unit mode keeps its one file; a product job with several runs saves one file per run so no label is left out
+        if (i > 0 && unitMode) break
+        const name = `labels-${size.id}${i ? `-${i + 1}` : ''}`
+        const out = await call<{ path: string }>('printing', 'exportPdf', {
+          html: r.html, path: `${name}.pdf`, paper: size.sheet ? 'A4' : 'label', widthMm: page.widthMm, heightMm: page.heightMm, name
+        })
+        paths.push(out.path)
+      }
       void remember()
-      setNotice(`PDF saved to ${out.path}`)
+      setNotice(`PDF saved to ${paths.join(', ')}`)
       toast('Label PDF saved', 'good')
     } catch (e) {
       setNotice(null)
@@ -211,23 +346,48 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
 
   return (
     <Modal
-      wide open={open} onClose={onClose} title={unitMode ? 'Print unit labels' : 'Print barcode label'}
+      wide open={open} onClose={onClose} title={reprinting ? 'Reprint barcode label' : unitMode ? 'Print unit labels' : 'Print barcode label'}
       footer={
         <>
           <Button onClick={onClose}>Close</Button>
-          <Button disabled={!!busy || !!customBad || !preview} onClick={() => void doPdf()}>{busy === 'pdf' ? 'Saving…' : 'Save PDF'}</Button>
-          <Button variant="primary" disabled={!!busy || !!customBad || !preview} onClick={() => void doPrint()}>{busy === 'print' ? 'Printing…' : `Print ${total} label${total === 1 ? '' : 's'}`}</Button>
+          <Button disabled={!!busy || !!customBad || !preview || !!blocked || !!planErr} onClick={() => void doPdf()}>{busy === 'pdf' ? 'Saving…' : 'Save PDF'}</Button>
+          <Button variant="primary" data-testid="label-print" disabled={!!busy || !!customBad || !preview || !!blocked || !!planErr} onClick={() => void doPrint()}>{busy === 'print' ? 'Printing…' : `${reprinting ? 'Reprint' : 'Print'} ${total} label${total === 1 ? '' : 's'}`}</Button>
         </>
       }
     >
       {heading && <InlineAlert tone="good">{heading}</InlineAlert>}
+      {blocked && <div style={{ marginTop: 8 }} data-testid="label-blocked"><InlineAlert tone="bad" title="Labels cannot be printed on this computer">{blocked} A damaged label can still be reprinted here.</InlineAlert></div>}
+      {planErr && <div style={{ marginTop: 8 }}><InlineAlert tone="bad" title="Cannot prepare the labels">{planErr}</InlineAlert></div>}
+      {shortfall && (
+        <div style={{ marginTop: 8 }} data-testid="label-shortfall">
+          <InlineAlert
+            tone="warn" title="More labels than pieces in stock"
+            action={canReceive
+              ? <Button size="sm" disabled={!!busy} data-testid="label-receive-extra" onClick={() => void (lastAction.current === 'pdf' ? doPdf(true) : doPrint(false, true))}>Add {shortfallExtra(shortfall)} to stock and {lastAction.current === 'pdf' ? 'save the PDF' : 'print'}</Button>
+              : undefined}
+          >
+            {shortfallLines(shortfall).map((l) => <div key={l}>{l}</div>)}
+            <div>
+              Every label number belongs to one piece in stock, so nothing was printed and stock was not changed. Lower the number of labels
+              {canReceive ? `, or add the ${shortfallExtra(shortfall)} extra piece${shortfallExtra(shortfall) === 1 ? '' : 's'} to stock now (a stock adjustment "found" is recorded).` : ', or ask someone who may adjust stock to receive the extra pieces first.'}
+            </div>
+          </InlineAlert>
+        </div>
+      )}
+      {issued && issuedCodes.length > 0 && (
+        <div style={{ marginTop: 8 }} data-testid="label-issued">
+          <InlineAlert tone="info" title="These label numbers are now reserved for this job">
+            {issued.length === 1 ? codeRangeText(issuedCodes) : `${issuedCodes.length} numbers for ${issued.length} products`}. They are never given out again. If the printer fails, press Retry here (the same numbers are printed); later they can only be printed with "Reprint a damaged label".
+          </InlineAlert>
+        </div>
+      )}
       {failure && (
         <div style={{ marginTop: 8 }}>
           <InlineAlert
             tone="bad" title="Could not print the labels"
             action={<span className="row"><Button size="sm" disabled={!!busy} onClick={() => void doPrint()}>Retry</Button><Button size="sm" disabled={!!busy} onClick={() => void doPdf()}>Save PDF</Button></span>}
           >
-            {failure}. Your {unitMode ? 'unit codes are' : 'barcode is'} already saved, nothing was lost. Check the label printer under Printing &gt; Printers, then Retry, or save a PDF.
+            {failure}. Your {unitMode || issued ? 'label numbers are' : 'barcode is'} already saved, nothing was lost. Check the label printer under Printing &gt; Printers, then Retry, or save a PDF.
           </InlineAlert>
         </div>
       )}
@@ -254,9 +414,33 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
             </div>
           )}
           {customBad && <div className="field-error" role="alert">{customBad}</div>}
-          <Field label={unitMode ? `Copies of each unit label (${unitCodes!.length} unit${unitCodes!.length === 1 ? '' : 's'})` : variantIds.length > 1 ? `Copies per product (${variantIds.length} products)` : 'Number of copies'} hint={total > 2000 ? 'At most 2000 labels are printed at a time' : undefined}>
-            <Input type="number" min={1} max={500} value={copies} onChange={(e) => setCopies(e.target.value)} />
+          <Field
+            label={unitMode ? `Copies of each label (${existingCodes.length} number${existingCodes.length === 1 ? '' : 's'})` : variantIds.length > 1 ? `Labels per product (${variantIds.length} products)` : 'Number of labels'}
+            hint={total > 2000 ? 'At most 2000 labels are printed at a time' : !unitMode && split.unique.length ? 'Each label gets its own number' : undefined}
+          >
+            <Input type="number" min={1} max={500} value={copies} disabled={!!issued} onChange={(e) => setCopies(e.target.value)} data-testid="label-copies" />
           </Field>
+          {!unitMode && firstPlan?.mode === 'unique' && variantIds.length === 1 && (
+            <p className="muted" style={{ margin: '4px 0 0' }} data-testid="label-plan">
+              {firstPlan.unlabelled} of {Math.max(0, firstPlan.stock)} piece{firstPlan.stock === 1 ? '' : 's'} in stock {firstPlan.unlabelled === 1 ? 'has' : 'have'} no label of {firstPlan.unlabelled === 1 ? 'its' : 'their'} own yet.
+            </p>
+          )}
+          {!(unitCodes && unitCodes.length > 0) && (
+            <fieldset style={{ border: 0, padding: 0, margin: '10px 0 0' }} data-testid="label-reprint">
+              <legend className="muted" style={{ padding: 0, marginBottom: 4 }}>Reprint a damaged label (no new number)</legend>
+              <div className="row" style={{ gap: 6 }}>
+                <Input aria-label="Label number to reprint" placeholder="Type or scan the label number" value={reprintText} disabled={!!issued}
+                  onChange={(e) => setReprintText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addReprint() } }} />
+                <Button type="button" disabled={!reprintText.trim() || !!issued} onClick={() => void addReprint()}>Reprint</Button>
+              </div>
+              {reprintErr && <div className="field-error" role="alert">{reprintErr}</div>}
+              {reprinting && (
+                <div style={{ marginTop: 4 }}>
+                  Reprinting <strong>{reprint.join(', ')}</strong>. <button type="button" className="btn btn-ghost" onClick={() => { setReprint([]); setCopies(String(initialCopies)) }}>Back to new labels</button>
+                </div>
+              )}
+            </fieldset>
+          )}
           <fieldset style={{ border: 0, padding: 0, margin: '8px 0 0' }}>
             <legend className="muted" style={{ padding: 0, marginBottom: 4 }}>Show on label</legend>
             {OPTION_LABELS.map(([k, label]) => (
@@ -273,11 +457,12 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
           </p>
         </div>
         <div>
-          {unitMode && <div style={{ marginBottom: 6 }} data-testid="label-unit-codes">Unit codes: <strong>{unitCodes!.length <= 3 ? unitCodes!.join(', ') : `${unitCodes![0]} … ${unitCodes![unitCodes!.length - 1]} (${unitCodes!.length})`}</strong></div>}
-          {barcode && <div style={{ marginBottom: 6 }}>Barcode: <strong data-testid="label-barcode" style={{ letterSpacing: '.08em' }}>{barcode}</strong></div>}
+          {unitMode && <div style={{ marginBottom: 6 }} data-testid="label-unit-codes">Unit codes: <strong>{existingCodes.length <= 3 ? existingCodes.join(', ') : `${existingCodes[0]} … ${existingCodes[existingCodes.length - 1]} (${existingCodes.length})`}</strong></div>}
+          {!unitMode && firstPlan?.mode === 'unique' && !issued && <div style={{ marginBottom: 6 }} className="muted">The preview shows the next label number{n === 1 ? '' : 's'}. Numbers are given out when you print.</div>}
+          {barcode && !unitMode && <div style={{ marginBottom: 6 }}>{firstPlan?.mode === 'unique' ? 'Product barcode' : 'Barcode'}: <strong data-testid="label-barcode" style={{ letterSpacing: '.08em' }}>{barcode}</strong></div>}
           {previewErr ? (
             <InlineAlert tone="bad" title="Cannot preview this label">{previewErr}</InlineAlert>
-          ) : !preview || !ready ? (
+          ) : !preview || !ready || planning ? (
             <Spinner label="Preparing preview…" />
           ) : (
             <>

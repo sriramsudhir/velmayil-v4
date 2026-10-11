@@ -4,6 +4,6 @@ export const order = 1
 
 export function register(app: App): void {
   app.expose('app', {
-    info: () => ({ name: 'Velmayil POS', version: process.env.npm_package_version ?? '1.0.11', userDataDir: app.userDataDir })
+    info: () => ({ name: 'Velmayil POS', version: process.env.npm_package_version ?? '1.0.12', userDataDir: app.userDataDir })
   })
 }

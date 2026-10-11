@@ -1,7 +1,7 @@
 import { createScanList, normalizeUnitCode, parseUnitCode, type ScanList } from '@shared/scanList'
 import type { CartLine, SavedCart, Variant } from './types'
 
-/** Pure helpers for per-unit (PREFIX-NNNN) tracked lines on the bill. The bill itself is the "active list". */
+/** Pure helpers for per-unit tracked lines on the bill (label numbers like 2000000190, older PREFIX-NNNN codes). The bill itself is the "active list". */
 
 export const TRACKED_HINT = 'This product is tracked per unit - scan the unit code on the item'
 export const notAvailableMessage = (code: string, status?: string): string =>
@@ -9,7 +9,7 @@ export const notAvailableMessage = (code: string, status?: string): string =>
 
 export interface UnitInfo { code: string; status: string }
 // NOTE: Variant.unit is the unit of measure (string); a scanned unit arrives as an object under the same key (contract: unit:{code,status}).
-export type ScanResponse = Omit<Variant, 'unit'> & { unit?: UnitInfo | string | null; trackUnits?: boolean }
+export type ScanResponse = Omit<Variant, 'unit'> & { unit?: UnitInfo | string | null; trackUnits?: boolean; unlabelledUnits?: number }
 export const unitInfoOf = (r: Pick<ScanResponse, 'unit'>): UnitInfo | null => (r.unit && typeof r.unit === 'object' ? r.unit : null)
 
 /** All unit codes currently on the bill. */
@@ -113,3 +113,15 @@ export function clearDraft(): void {
 /** What a scan response means for the bill. */
 export type ScanKind = 'unit' | 'tracked-product' | 'plain'
 export const classifyScan = (r: Pick<ScanResponse, 'unit' | 'trackUnits'>): ScanKind => (unitInfoOf(r) ? 'unit' : r.trackUnits ? 'tracked-product' : 'plain')
+
+/**
+ * Old labels printed with the shared product barcode: a tracked product may still be billed by that barcode (or picked by name)
+ * while it has in-stock pieces that never got a label of their own (`unlabelledUnits` from pos.scan / pos.search), and only for as
+ * many pieces as are not on the bill yet. Once every piece has its own label the answer is no: scan the label (TRACKED_HINT).
+ * The server applies the same rule when the sale is saved.
+ */
+export function legacyScanAllowed(lines: CartLine[], v: { variantId: number; trackUnits?: boolean; unlabelledUnits?: number }, qty = 1): boolean {
+  if (!v.trackUnits) return true
+  const onBill = lines.reduce((n, l) => (l.variantId === v.variantId && !l.tracked ? n + l.qty : n), 0)
+  return onBill + qty <= (v.unlabelledUnits ?? 0)
+}

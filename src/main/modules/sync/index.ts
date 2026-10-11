@@ -6,6 +6,8 @@ import { SyncService } from './service'
 export const order = 90
 
 export { SyncService } from './service'
+export type { SyncRole } from './service'
+export { SHARED_SETTINGS, LOCAL_SETTINGS } from './shared'
 export type { SyncTransport, Change } from './protocol'
 
 const parse = <T extends z.ZodType>(schema: T, args: unknown): z.infer<T> => {
@@ -31,7 +33,12 @@ export function register(app: App): void {
     getStatus: () => (canView(), svc.status()),
     getConfig: () => (canView(), svc.publicConfig()),
     saveConfig: (a) => (canConfigure(), svc.saveConfig(a)),
-    testConnection: async () => (canConfigure(), svc.testConnection()),
+    /** `{ address?, pairingCode? }` tests what was typed before it is saved */
+    testConnection: async (a) => (canConfigure(), svc.testConnection(a)),
+    /** Admin system: the code the owner types once on the client (sync.manage only) */
+    getPairingCode: () => (canConfigure(), { code: svc.pairingCode() }),
+    /** Client system: look for Admin systems on the LAN */
+    discover: async () => (canConfigure(), svc.discover()),
     syncNow: async () => (canView(), svc.syncNow({ force: true })),
     resyncAll: () => (canConfigure(), svc.resyncAll()),
     retryFailed: () => (canView(), { retried: svc.retryFailed() }),

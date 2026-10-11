@@ -116,7 +116,8 @@ export class InventoryService {
     if (!v) return null
     const loc = a.locationId ?? this.app.defaultLocationId()
     const qty = this.db.value<number>('SELECT qty FROM stock_levels WHERE variant_id=? AND location_id=?', v.variantId, loc) ?? 0
-    return { ...v, cost: this.canCost() ? v.cost : null, qtyAtLocation: qty }
+    /** unlabelledUnits: tracked products only, pieces at this location that never got a label of their own (handled by quantity) */
+    return { ...v, cost: this.canCost() ? v.cost : null, qtyAtLocation: qty, unlabelledUnits: v.trackUnits && this.units ? this.units.unlabelledCount(v.variantId, loc) : 0 }
   }
 
   private stockFilter(a: z.infer<typeof stockQuery>) {
@@ -320,7 +321,9 @@ export class InventoryService {
 
     const units = this.units
     const tracked = !!units && variant.trackUnits
-    if (tracked && a.delta < 0 && a.unitCodes?.length !== -a.delta)
+    // pieces without a label of their own (label printing switched tracking on) need no code: they complete the list
+    const outCodes = tracked && a.delta < 0 ? units!.completeCodes(a.variantId, -a.delta, a.unitCodes, loc) : null
+    if (tracked && a.delta < 0 && !outCodes)
       throw new AppError('VALIDATION', `${variant.displayName}: scan the ${-a.delta} unit code(s) being removed from stock`, { code: 'UNIT_CODES_REQUIRED', variantId: a.variantId, qty: -a.delta })
     if (a.unitCodes?.length && (!tracked || a.delta > 0)) throw new AppError('VALIDATION', 'unitCodes only apply to a decrease of a unit-coded product', { code: 'UNIT_NOT_TRACKED' })
 
@@ -335,7 +338,7 @@ export class InventoryService {
         refId: row.lastId, unitCost: variant.cost, note: `${a.reason}${a.note ? ': ' + a.note : ''}`, allowNegative: false
       })
       let unitCodes: string[] = []
-      if (tracked && a.delta < 0) unitCodes = units!.voidUnits(a.unitCodes!, { reason: `Adjustment: ${a.reason}`, variantId: a.variantId, locationId: loc }).map((u) => u.code)
+      if (tracked && a.delta < 0) unitCodes = units!.voidUnits(outCodes!, { reason: `Adjustment: ${a.reason}`, variantId: a.variantId, locationId: loc }).map((u) => u.code)
       else if (tracked && a.generateUnits !== false) unitCodes = units!.generateTx({ variantId: a.variantId, count: a.delta, locationId: loc, reason: `Adjustment: ${a.reason}` }).codes
       this.app.audit({
         entity: 'stock', entityId: a.variantId, action: 'adjust',
@@ -492,14 +495,21 @@ export class InventoryService {
       args
     )
     return this.db.transaction(() => {
-      this.openCount(a.countId)
+      const cnt = this.openCount(a.countId)
       let updated = 0
       for (const e of a.entries) {
         if (this.units?.isTracked(e.variantId)) {
-          // unit-coded products are counted by scanning each unit's label: only "none present" (0) or "clear" (null) can be typed
-          if (e.countedQty != null && e.countedQty !== 0)
-            throw new AppError('VALIDATION', 'This product is counted by scanning its unit codes, not by typing a quantity', { code: 'UNIT_CODE_REQUIRED', variantId: e.variantId })
-          this.db.run('DELETE FROM stock_count_units WHERE count_id=? AND variant_id=?', a.countId, e.variantId)
+          // unit-coded products are counted by scanning each unit's label: only "none present" (0) or "clear" (null) can be typed.
+          // Exception: pieces that never got a label of their own cannot be scanned, so a TOTAL may be typed that covers the
+          // scanned units plus at most that many unlabelled pieces.
+          if (e.countedQty != null && e.countedQty !== 0) {
+            const plainMax = this.units.unlabelledCount(e.variantId, cnt.location_id)
+            const scannedHere = this.units.countedScanned(a.countId, e.variantId, cnt.location_id)
+            if (!plainMax)
+              throw new AppError('VALIDATION', 'This product is counted by scanning its unit codes, not by typing a quantity', { code: 'UNIT_CODE_REQUIRED', variantId: e.variantId })
+            if (e.countedQty < scannedHere || e.countedQty > scannedHere + plainMax)
+              throw new AppError('VALIDATION', `${scannedHere} unit label(s) were scanned and ${plainMax} piece(s) have no label of their own: enter a total from ${scannedHere} to ${scannedHere + plainMax}, and scan the labelled pieces`, { code: 'UNIT_CODE_REQUIRED', variantId: e.variantId, scanned: scannedHere, unlabelled: plainMax })
+          } else this.db.run('DELETE FROM stock_count_units WHERE count_id=? AND variant_id=?', a.countId, e.variantId)
         }
         const r = this.db.run('UPDATE stock_count_items SET counted_qty=? WHERE count_id=? AND variant_id=?', e.countedQty, a.countId, e.variantId)
         if (!r.changes) throw new AppError('NOT_FOUND', `Variant ${e.variantId} is not on this count sheet`)
@@ -521,8 +531,20 @@ export class InventoryService {
       const item = this.db.get<{ counted_qty: number | null; expected_qty: number }>('SELECT counted_qty, expected_qty FROM stock_count_items WHERE count_id=? AND variant_id=?', a.countId, v.variantId)
       if (!item) throw new AppError('NOT_FOUND', `${v.displayName} is not on this count sheet`)
       const su = scannedUnitOf(v)
-      if (v.trackUnits && !su)
-        throw new AppError('VALIDATION', `${v.displayName} is counted by scanning each unit's code label`, { code: 'UNIT_CODE_REQUIRED', variantId: v.variantId })
+      // pieces of a unit-coded product counted by quantity so far (only possible for pieces without a label of their own)
+      const plainBefore = v.trackUnits && this.units ? this.units.countedPlain(a.countId, v.variantId, cnt.location_id) : 0
+      if (v.trackUnits && !su) {
+        // the shared product barcode still counts the pieces that never got a label of their own
+        const plainMax = this.units?.unlabelledCount(v.variantId, cnt.location_id) ?? 0
+        const q = a.qty ?? 1
+        const plain = a.mode === 'set' ? q : plainBefore + q
+        if (plain > plainMax)
+          throw new AppError('VALIDATION', `${v.displayName} is counted by scanning each unit's code label`, { code: 'UNIT_CODE_REQUIRED', variantId: v.variantId, unlabelled: plainMax })
+        const next = this.units!.countedScanned(a.countId, v.variantId, cnt.location_id) + plain
+        this.db.run('UPDATE stock_count_items SET counted_qty=? WHERE count_id=? AND variant_id=?', next, a.countId, v.variantId)
+        this.enqueueCount(a.countId)
+        return { variantId: v.variantId, displayName: v.displayName, sku: v.sku, expectedQty: item.expected_qty, countedQty: next, variance: next - item.expected_qty }
+      }
       if (su) {
         // active-list rule: a code already scanned in this count is NOT added again (duplicate warning), otherwise it is added
         const code = su.code
@@ -530,10 +552,7 @@ export class InventoryService {
         if (!dup) this.db.run('INSERT INTO stock_count_units(count_id,code,variant_id) VALUES (?,?,?)', a.countId, code, v.variantId)
         const u = this.units!.rowByCode(code)!
         const expectedHere = (u.status === 'in_stock' || u.status === 'returned') && u.location_id === cnt.location_id
-        const counted = this.db.value<number>(
-          `SELECT COUNT(*) FROM stock_count_units s JOIN product_units u ON u.code = s.code WHERE s.count_id=? AND s.variant_id=? AND u.status IN ('in_stock','returned') AND u.location_id=?`,
-          a.countId, v.variantId, cnt.location_id
-        ) ?? 0
+        const counted = this.units!.countedScanned(a.countId, v.variantId, cnt.location_id) + plainBefore
         this.db.run('UPDATE stock_count_items SET counted_qty=? WHERE count_id=? AND variant_id=?', counted, a.countId, v.variantId)
         this.enqueueCount(a.countId)
         return {
@@ -623,11 +642,12 @@ export class InventoryService {
         const v = this.app.lookup.byId(it.variantId)
         if (!v) throw new AppError('NOT_FOUND', `Variant ${it.variantId} not found`)
         if (!v.trackStock) throw new AppError('VALIDATION', `${v.displayName} does not track stock`)
-        if (v.trackUnits && it.unitCodes?.length !== it.qty)
+        const moveCodes = v.trackUnits && this.units ? this.units.completeCodes(it.variantId, it.qty, it.unitCodes, a.fromLocationId) : null
+        if (v.trackUnits && this.units ? !moveCodes : v.trackUnits && it.unitCodes?.length !== it.qty)
           throw new AppError('VALIDATION', `${v.displayName}: scan the ${it.qty} unit code(s) being transferred`, { code: 'UNIT_CODES_REQUIRED', variantId: it.variantId, qty: it.qty })
         if (!v.trackUnits && it.unitCodes?.length) throw new AppError('VALIDATION', `${v.displayName} does not track unit codes`, { code: 'UNIT_NOT_TRACKED' })
         this.db.run('INSERT INTO stock_transfer_items(transfer_id,variant_id,qty) VALUES (?,?,?)', t.lastId, it.variantId, it.qty)
-        if (v.trackUnits && this.units) this.units.moveUnits(it.unitCodes!, { variantId: it.variantId, fromLocationId: a.fromLocationId, toLocationId: a.toLocationId })
+        if (v.trackUnits && this.units) this.units.moveUnits(moveCodes!, { variantId: it.variantId, fromLocationId: a.fromLocationId, toLocationId: a.toLocationId })
         this.app.moveStock({ variantId: it.variantId, delta: -it.qty, type: 'transfer_out', locationId: a.fromLocationId, refType: 'transfer', refId: t.lastId, unitCost: v.cost, note: number, allowNegative: false })
         this.app.moveStock({ variantId: it.variantId, delta: it.qty, type: 'transfer_in', locationId: a.toLocationId, refType: 'transfer', refId: t.lastId, unitCost: v.cost, note: number, allowNegative: false })
       }
