@@ -15,12 +15,14 @@ import { serialScanner, serialSupported } from '@/lib/serialScanner'
 import { hidScanner, hidSupported } from '@/lib/hidScanner'
 import { BoxRecorder, noteBoxSubmit, scanBoxKey } from '@/lib/scanInput'
 import { createScanList, duplicateMessage, type ScanList } from '@shared/scanList'
-import { addCodes, addUnit, allUnitCodes, classifyScan, keepUnits, MAX_UNIT_QTY, clearDraft, MAX_LINE_QTY, isLocalDuplicate, legacyScanAllowed, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, TRACKED_HINT, unitInfoOf, type ScanResponse } from './unitCart'
+import { addCodes, addUnit, allUnitCodes, classifyScan, keepUnits, MAX_UNIT_QTY, clearDraft, MAX_LINE_QTY, isLocalDuplicate, lineWithCode, listFromLines, loadDraft, normalizeResumed, notAvailableMessage, removeLine, removeUnit, saleLinePayload, saveDraft, unitInfoOf, type ScanResponse } from './unitCart'
 import type { Approval, CartCustomer, CartLine, PayMethod, PosSettings, SaleResult, SavedCart, Variant } from './types'
 import './pos.css'
 
 const newId = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`)
 const DEFAULT_SETTINGS: PosSettings = { maxDiscountBp: 0, canDiscountUnlimited: false, pricesIncludeTax: true, roundOff: true, requireShift: false, allowNegative: false }
+/** Label numbers shown on one bill line; the rest are counted ("and 12 more") so a line of 500 pieces stays one line. */
+const MAX_CHIPS = 6
 
 interface ShiftRow { id: number; openedAt: number; openingCash: number }
 interface ShiftSummary { shift: ShiftRow; openingCash: number; cashSales: number; cashRefunds: number; expectedCash: number; salesCount: number; salesTotal: number; returnsTotal: number; byMethod: { method: string; amount: number }[]; closingCash: number | null; variance: number | null }
@@ -134,10 +136,17 @@ export function PosScreen() {
       if (want < have) { setLinesSync((cur) => keepUnits(cur, unitList.current, key, want)); return }
       if (want === have) return
       try {
-        const r = await call<{ codes: string[]; left: number }>('units', 'nextAvailable', { variantId: line.variantId, exclude: allUnitCodes(linesRef.current), count: want - have })
-        if (r.codes.length) setLinesSync((cur) => addCodes(cur, unitList.current, key, r.codes))
-        if (r.codes.length < want - have) {
-          const now = have + r.codes.length
+        const count = () => linesRef.current.find((l) => l.key === key)?.unitCodes?.length ?? want
+        let enough = true
+        // a label scanned while the answer was on its way can take the very piece the server named: ask again for the rest
+        for (let round = 0; round < 3 && enough && count() < want; round++) {
+          const ask = want - count()
+          const r = await call<{ codes: string[]; left: number }>('units', 'nextAvailable', { variantId: line.variantId, exclude: allUnitCodes(linesRef.current), count: ask })
+          if (r.codes.length) setLinesSync((cur) => addCodes(cur, unitList.current, key, r.codes))
+          enough = r.codes.length === ask
+        }
+        if (!enough) {
+          const now = count()
           toast(`${line.name}: only ${now} piece${now === 1 ? ' is' : 's are'} in stock, so the quantity is ${now}. Add stock (Products > Print label, or a purchase) to sell more.`, 'bad')
         }
       } catch (e) {
@@ -158,6 +167,28 @@ export function PosScreen() {
     }
   }, [toast])
 
+  /**
+   * A product with label numbers added WITHOUT scanning a label (picked by name, or by its ordinary product barcode): the server
+   * names the next `qty` pieces in stock that are not on the bill yet, and they go on the bill like scanned labels.
+   */
+  const addTrackedProduct = useCallback((v: Pick<Variant, 'variantId' | 'displayName' | 'sku' | 'price' | 'taxRateBp' | 'trackStock' | 'stock'>, qty: number, beep: boolean) => {
+    unitQtyQueue.current = unitQtyQueue.current.then(async () => {
+      try {
+        const want = Math.max(1, Math.min(MAX_UNIT_QTY, qty))
+        const r = await call<{ codes: string[]; left: number }>('units', 'nextAvailable', { variantId: v.variantId, exclude: allUnitCodes(linesRef.current), count: want })
+        if (!r.codes.length) { warnUnit('unavailable', `${v.displayName}: no piece is left in stock. Add stock (Products > Print label, or a purchase) to sell it.`); return }
+        let next = linesRef.current
+        for (const c of r.codes) next = addUnit(next, unitList.current, v, c, newId).lines
+        setLinesSync(next)
+        setUnitWarn(null)
+        if (beep) beepOk()
+        if (r.codes.length < want) toast(`${v.displayName}: only ${r.codes.length} more piece${r.codes.length === 1 ? ' is' : 's are'} in stock, so ${r.codes.length} ${r.codes.length === 1 ? 'was' : 'were'} added.`, 'bad')
+      } catch (e) {
+        toast(errMsg(e), 'bad')
+      }
+    })
+  }, [setLinesSync, toast, warnUnit])
+
   /** The bill is the active list: a unit code already on it is never added twice. Returns true when something was added. */
   const applyScan = useCallback((v: ScanResponse, code: string, qty: number, beep: boolean): boolean => {
     const kind = classifyScan(v)
@@ -169,11 +200,11 @@ export function PosScreen() {
       if (beep) beepOk()
       return true
     }
-    // an old label with the shared product barcode: allowed only while pieces without a label of their own are left in stock
-    if (kind === 'tracked-product' && !legacyScanAllowed(linesRef.current, v, qty)) { warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); return false }
+    // the product's ordinary barcode (old labels, or typed): the next pieces in stock go on the bill, each with its own number
+    if (kind === 'tracked-product') { addTrackedProduct(v as Variant, qty, beep); return true }
     addVariant(v as Variant, qty, !beep)
     return true
-  }, [addVariant, setLinesSync, warnUnit])
+  }, [addVariant, addTrackedProduct, setLinesSync, warnUnit])
 
   /** Server said the unit exists but is sold / void. */
   const unitConflict = useCallback((e: unknown, code: string): boolean => {
@@ -281,7 +312,7 @@ export function PosScreen() {
     }
   }
   submitRef.current = () => { void submitScan() }
-  const pick = (v: Variant) => { if (v.trackUnits && !legacyScanAllowed(linesRef.current, v, 1)) warnUnit('tracked', `${v.displayName}: ${TRACKED_HINT}`); else addVariant(v); setText(''); setResults([]); setHi(-1); setNotFound(null); focusScan() }
+  const pick = (v: Variant) => { if (v.trackUnits) addTrackedProduct(v, 1, true); else addVariant(v); setText(''); setResults([]); setHi(-1); setNotFound(null); focusScan() }
 
   // ---- barcode scanners (keyboard-wedge when focus is NOT in the scan box, serial / HID readers) go straight to the cart
   const scannerCfg = useScannerConfig()
@@ -483,9 +514,10 @@ export function PosScreen() {
                         <strong>{l.name}</strong> <span className="muted">{l.sku}</span>
                         {l.tracked && (
                           <div className="pos-units" data-testid="unit-codes">
-                            {(l.unitCodes ?? []).map((c) => (
+                            {(l.unitCodes ?? []).slice(0, MAX_CHIPS).map((c) => (
                               <span key={c} className="pos-unitchip" data-unit={c}>{c}<button type="button" aria-label={`Remove ${c}`} onClick={() => removeCode(l.key, c)}>✕</button></span>
                             ))}
+                            {(l.unitCodes?.length ?? 0) > MAX_CHIPS && <span className="muted" data-testid="unit-more">and {(l.unitCodes?.length ?? 0) - MAX_CHIPS} more</span>}
                           </div>
                         )}
                         {over && <div className="pos-warn">Only {l.stock} in stock{settings.allowNegative ? ' (negative stock allowed)' : ''}</div>}

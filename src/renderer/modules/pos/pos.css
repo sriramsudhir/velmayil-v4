@@ -11,7 +11,14 @@
 .pos-cart { min-height: 0; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .pos-cart table { width: 100%; border-collapse: collapse; }
 .pos-cart th { position: sticky; top: 0; background: var(--panel-2); font-size: 12px; color: var(--muted); text-align: left; padding: 8px; z-index: 1; }
-.pos-cart td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.pos-cart td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* The + and - buttons must stay where they are while the cashier clicks them. Every column except Item is exactly as wide as
+   its controls and Item takes the rest, so label numbers appearing under the name (or wrapping to a new row) cannot push the
+   Qty column sideways; rows are top-aligned so a taller Item cell cannot push the buttons down either. */
+.pos-cart th:nth-child(1), .pos-cart td:nth-child(1), .pos-cart th:nth-child(n+3), .pos-cart td:nth-child(n+3) { width: 1%; white-space: nowrap; }
+.pos-cart th:nth-child(2), .pos-cart td:nth-child(2) { width: 100%; }
+.pos-cart td:nth-child(6) { min-width: 132px; }
+.pos-cart td:nth-child(1), .pos-cart td:nth-child(2), .pos-cart td:nth-child(6) { padding-top: 12px; }
 .pos-cart .r { text-align: right; }
 .pos-qty { display: inline-flex; align-items: center; gap: 4px; }
 .pos-qty .btn { padding: 2px 9px; }

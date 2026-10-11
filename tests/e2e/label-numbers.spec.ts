@@ -170,7 +170,7 @@ test('03 printing again continues with the next number; a reprint creates none',
   await page.getByRole('dialog', { name: 'Edit product' }).locator('footer').getByRole('button', { name: 'Cancel' }).click()
 })
 
-test('04 billing: a label is added once, a second scan is a duplicate, a sold label and the old shared barcode are refused', async () => {
+test('04 billing: a label is added once, a second scan is a duplicate, a sold label is refused, the old shared barcode takes the next piece', async () => {
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: /Billing/ }).click()
   await page.waitForTimeout(500)
   const skip = page.getByRole('button', { name: 'Skip for now' })
@@ -184,10 +184,12 @@ test('04 billing: a label is added once, a second scan is a duplicate, a sold la
   expect(await chips()).toEqual([codes[0]])
   await scan(codes[1])
   expect(await chips()).toEqual([codes[0], codes[1]])
-  // every piece has its own label now: the old shared barcode is refused with the hint
+  // the old shared barcode (or the product picked by name) takes the next piece in stock, with its own number
+  const next = (await call('units', 'nextAvailable', { variantId, exclude: [codes[0], codes[1]] })).codes[0] as string
   await scan(SHARED)
-  await expect(page.getByTestId('unit-warning')).toContainText('scan the unit code on the item')
-  expect(await chips()).toEqual([codes[0], codes[1]])
+  await expect.poll(chips).toEqual([codes[0], codes[1], next])
+  await page.getByRole('button', { name: `Remove ${next}` }).click()
+  await expect.poll(chips).toEqual([codes[0], codes[1]])
 
   // the server refuses the same things, whatever the screen does
   const sale = await call('pos', 'completeSale', { lines: [{ variantId, qty: 1, unitCodes: [codes[2]] }], payments: [{ method: 'cash', amount: 10000 }] })

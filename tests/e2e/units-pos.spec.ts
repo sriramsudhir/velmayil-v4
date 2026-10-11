@@ -296,12 +296,21 @@ test('04 pay: the sale completes with the unit codes, the dialog lists them; a s
   await expect.poll(unitChips).toEqual([codes[2]])
 })
 
-test('05 scanning the plain product barcode of a tracked product asks for the unit code and adds nothing', async () => {
+test('05 the ordinary product barcode of a tracked product adds the next piece in stock, with its own code', async () => {
   await freshBill()
+  const free = (await call('units', 'nextAvailable', { variantId: (await call('pos', 'scan', { code: '8900000000012' })).variantId, count: 10 })).codes as string[]
+  expect(free.length).toBeGreaterThan(0)
   await scan('8900000000012')
-  await expect(warning()).toBeVisible()
-  await expect(page.getByTestId('unit-warning-text')).toContainText('tracked per unit')
-  expect(await lineCount()).toBe(0)
+  await expect.poll(unitChips).toEqual([free[0]])
+  expect(await lineCount()).toBe(1)
+  expect(await qtyOf()).toEqual([1])
+  await expect(warning()).toHaveCount(0)
+  // nothing left after the last piece: scanning the barcode again says so and adds nothing
+  for (let i = 1; i < free.length; i++) await scan('8900000000012')
+  await expect.poll(unitChips).toEqual(free)
+  await scan('8900000000012')
+  await expect(page.getByTestId('unit-warning-text')).toContainText('no piece is left in stock')
+  expect(await unitChips()).toEqual(free)
 })
 
 test('99 no renderer console errors', async () => {
