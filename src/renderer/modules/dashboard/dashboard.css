@@ -1,0 +1,9 @@
+/* Dashboard "Recent sales": each row opens the bill; holders of pos.delete also get a trash button (see pos/DeleteSaleDialog). */
+.recent-list { list-style: none; margin: 0; padding: 0; }
+.recent-list .recent-row { padding: 2px 0; gap: 4px; }
+.recent-open { flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; margin: 0 -8px; border-radius: var(--radius); color: inherit; text-decoration: none; }
+.recent-list .recent-row:has(.del-sale-icon) .recent-open { margin-right: 0; }
+.recent-open:hover { background: var(--row-hover); }
+.recent-open:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.recent-open > span { min-width: 0; }
+.recent-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

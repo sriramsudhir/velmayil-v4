@@ -1,0 +1,16 @@
+/* Delete-invoice confirmation (shared by the dashboard and Sales history). Uses the design-system tokens of ui/ui.css. */
+.del-sale { display: grid; gap: 12px; }
+.del-sale .alert { margin: 0; }
+.del-sale-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.del-sale-facts > div { min-width: 0; }
+.del-sale-facts dt { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.del-sale-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.del-sale-tag { margin-left: 8px; }
+.del-sale-error { font-size: var(--fs-sm); }
+/* the final, irreversible step is a filled danger button (the outline .btn-danger stays for "open the dialog" buttons) */
+.btn.btn-danger.del-sale-confirm { background: var(--bad); border-color: var(--bad); color: var(--panel); }
+.btn.btn-danger.del-sale-confirm:hover:not(:disabled) { filter: brightness(.92); }
+
+/* icon-only trash button used in lists */
+.btn.del-sale-icon { min-height: 32px; width: 32px; padding: 0; color: var(--muted); flex: none; }
+.btn.del-sale-icon:hover, .btn.del-sale-icon:focus-visible { color: var(--bad); background: var(--bad-bg); }

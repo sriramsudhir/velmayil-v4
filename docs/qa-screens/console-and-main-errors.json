@@ -1,0 +1,15 @@
+{
+  "consoleErrors": [],
+  "mainErrors": [
+    "Debugger ending on ws://127.0.0.1:58730/e82cf02a-8c85-4e8e-b343-ebefae036e4e\r\nFor help, see: https://nodejs.org/learn/getting-started/debugging"
+  ],
+  "notes": [
+    "Label print outcome with virtual OneNote printer: sent",
+    "POS sale invoice shown in success panel: INV-2026-000001",
+    "Print A5 outcome with virtual OneNote printer: sent",
+    "58mm preview iframe metrics: {\"docScrollW\":220,\"docClientW\":220,\"docScrollH\":394,\"frameH\":394,\"frameW\":220}",
+    "receipt80 preview iframe metrics: {\"docScrollW\":303,\"docClientW\":303,\"docScrollH\":577,\"frameH\":577,\"frameW\":303}",
+    "invoiceA4 preview iframe metrics: {\"docScrollW\":794,\"docClientW\":794,\"docScrollH\":1123,\"frameH\":1123,\"frameW\":794}",
+    "invoiceA5 preview iframe metrics: {\"docScrollW\":560,\"docClientW\":560,\"docScrollH\":794,\"frameH\":794,\"frameW\":560}"
+  ]
+}
