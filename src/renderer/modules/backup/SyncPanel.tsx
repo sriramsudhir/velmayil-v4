@@ -226,11 +226,11 @@ function AdminSetup({ status: s, config: c, canConfigure, busy, run, save }: Set
     return (
       <>
         <p>
-          Choose this on the main computer. Velmayil v3 will then share its data over the LAN cable by itself; there is nothing else to install or start.
+          Choose this on the main computer. Velmayil v4 will then share its data over the LAN cable by itself; there is nothing else to install or start.
           {c.role === 'client' && ' This computer is currently a Client system; it will stop following the other computer.'}
         </p>
         <InlineAlert tone="info" title="Windows may ask for permission">
-          The first time, Windows Firewall can show “Allow Velmayil v3 to communicate on these networks?”. Tick <strong>both</strong> Private and Public
+          The first time, Windows Firewall can show “Allow Velmayil v4 to communicate on these networks?”. Tick <strong>both</strong> Private and Public
           networks and choose <strong>Allow access</strong>, otherwise the other computer cannot connect.
         </InlineAlert>
         <Button variant="primary" disabled={!canConfigure || busy === 'role'} onClick={() => save('role', { role: 'admin' }, 'This computer is now the Admin system')}>Make this the Admin system</Button>
@@ -277,7 +277,7 @@ function AdminSetup({ status: s, config: c, canConfigure, busy, run, save }: Set
         ? (
           <p className="muted">
             None has connected yet. If the Client says it cannot reach this computer: check the cable, then on <em>this</em> computer open Windows Security →
-            Firewall &amp; network protection → “Allow an app through firewall” and make sure <strong>Velmayil v3</strong> is ticked for both Private and Public.
+            Firewall &amp; network protection → “Allow an app through firewall” and make sure <strong>Velmayil v4</strong> is ticked for both Private and Public.
           </p>
           )
         : (
@@ -366,8 +366,8 @@ function ClientSetup({ status: s, config: c, canConfigure, busy, run, save }: Se
 
       {found && found.length === 0 && (
         <InlineAlert tone="warn" title="No Admin system answered">
-          Check that the cable is plugged in at both ends, that Velmayil v3 is open on the other computer and set as the Admin system, and that Windows Firewall
-          there allows Velmayil v3. You can also type the address shown on the Admin system by hand.
+          Check that the cable is plugged in at both ends, that Velmayil v4 is open on the other computer and set as the Admin system, and that Windows Firewall
+          there allows Velmayil v4. You can also type the address shown on the Admin system by hand.
         </InlineAlert>
       )}
       {found && found.length > 1 && (

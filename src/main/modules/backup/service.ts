@@ -74,7 +74,7 @@ const parse = <T extends z.ZodType>(schema: T, args: unknown): z.infer<T> => {
 }
 
 const stamp = (t: number): string => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
-export const appVersion = (): string => process.env.VELMAYIL_VERSION ?? process.env.npm_package_version ?? '1.0.12'
+export const appVersion = (): string => process.env.VELMAYIL_VERSION ?? process.env.npm_package_version ?? '4.0.0'
 
 /** Tables whose live content is kept as-is during restore (history of the backups themselves, schema bookkeeping). */
 const KEEP_ON_RESTORE = new Set(['backups', 'schema_migrations'])

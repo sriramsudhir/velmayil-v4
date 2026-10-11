@@ -564,7 +564,7 @@ describe('plain-language problems', () => {
     const c = track(makePos('POS-01')) // same code as the Admin, as after two default installs
     const none = await c.sync.testConnection({ address: `127.0.0.1:${dead}`, pairingCode: code })
     expect(none.ok).toBe(false)
-    expect(none.error).toMatch(/Velmayil v3 is not accepting connections there|Cannot reach the Admin system|No answer from the Admin system/)
+    expect(none.error).toMatch(/Velmayil v4 is not accepting connections there|Cannot reach the Admin system|No answer from the Admin system/)
     expect(none.error).not.toMatch(/ECONNREFUSED|fetch failed/)
 
     const other = http.createServer((_q, res) => res.end('{}'))
@@ -572,7 +572,7 @@ describe('plain-language problems', () => {
     try {
       const r = await c.sync.testConnection({ address: `127.0.0.1:${otherPort}`, pairingCode: code })
       expect(r.ok).toBe(false)
-      expect(r.error).toMatch(/not a Velmayil v3 Admin system/)
+      expect(r.error).toMatch(/not a Velmayil v4 Admin system/)
     } finally {
       other.closeAllConnections()
       await new Promise((r) => other.close(r))

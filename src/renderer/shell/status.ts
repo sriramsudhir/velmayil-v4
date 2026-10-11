@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { call } from '@/lib/api'
 
-export const DEFAULT_SHOP_NAME = 'Velmayil v3'
+export const DEFAULT_SHOP_NAME = 'Velmayil v4'
 /** Other modules may dispatch `window.dispatchEvent(new Event('velmayil:profile-changed'))` after saving the shop profile to refresh the top bar. */
 export const PROFILE_CHANGED_EVENT = 'velmayil:profile-changed'
 

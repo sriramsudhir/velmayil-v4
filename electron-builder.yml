@@ -1,5 +1,5 @@
 appId: com.velmayil.pos
-productName: Velmayil v3
+productName: Velmayil v4
 directories:
   output: release
   buildResources: resources
