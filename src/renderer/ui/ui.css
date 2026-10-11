@@ -53,6 +53,10 @@
 /* ===== base ===== */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The window itself never scrolls: the shell fills it and only the page inside scrolls. A scrolled window slides the whole app
+   up and leaves the rest blank. */
+html, body { overflow: hidden; }
+#root { position: relative; overflow: clip; }
 body { font-family: var(--font); font-size: var(--fs-md); line-height: 1.4; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
 h1 { font-size: var(--fs-2xl); margin: 0; line-height: 1.2; letter-spacing: -.01em; } h2 { font-size: var(--fs-xl); margin: 0; } h3 { margin: 0; font-size: var(--fs-lg); }
 a { color: var(--info); }
@@ -98,7 +102,9 @@ textarea.input { padding: 8px 10px; min-height: 72px; }
 .input-affix.input-lg .input-bare { min-height: calc(var(--control-h-lg) - 2px); }
 .affix { color: var(--muted); padding: 0 4px 0 10px; } .affix-end { padding: 0 10px 0 0; }
 .affix-btn { background: none; border: 0; cursor: pointer; padding: 0 10px; align-self: stretch; font: inherit; }
-.toggle, .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-height: 28px; }
+/* position: relative keeps the hidden checkbox inside its own row. Without it the checkbox is placed against the window, far
+   below the visible page, and focusing it (a click on the switch) scrolls the whole window there. */
+.toggle, .check { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-height: 28px; }
 .is-disabled { opacity: .55; cursor: not-allowed; }
 .check input { width: 18px; height: 18px; accent-color: var(--primary); margin: 0; }
 .toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -116,7 +122,7 @@ textarea.input { padding: 8px 10px; min-height: 72px; }
 /* ===== surfaces ===== */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--s4); margin-bottom: var(--s4); box-shadow: var(--shadow-sm); }
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--s3); gap: var(--s2); }
-.page { padding: 20px 24px; overflow: auto; height: 100%; }
+.page { position: relative; padding: 20px 24px; overflow: auto; height: 100%; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--s4); gap: var(--s3); flex-wrap: wrap; }
 .badge { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: var(--fs-xs); font-weight: 500; background: var(--panel-2); color: var(--text); white-space: nowrap; }
 .badge-good { background: var(--good-bg); color: var(--good); } .badge-warn { background: var(--warn-bg); color: var(--warn); } .badge-bad { background: var(--bad-bg); color: var(--bad); } .badge-info { background: var(--info-bg); color: var(--info); }
@@ -240,7 +246,7 @@ textarea.input { padding: 8px 10px; min-height: 72px; }
 .pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); } .pill-good i { background: var(--good); } .pill-warn i { background: var(--warn); } .pill-bad i { background: var(--bad); }
 .user-chip { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); line-height: 1.2; text-align: right; } .user-chip small { color: var(--muted); display: block; }
 .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; font-weight: 700; font-size: var(--fs-sm); flex: none; }
-.main { grid-area: main; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
+.main { grid-area: main; min-width: 0; min-height: 0; overflow: clip; background: var(--bg); }
 .center-screen { height: 100%; display: flex; align-items: center; justify-content: center; }
 .center-card { width: min(440px, 94vw); }
 .skip-link { position: absolute; left: -999px; top: 8px; z-index: 300; background: var(--panel); color: var(--text); padding: 8px 12px; border-radius: 6px; border: 2px solid var(--focus); } .skip-link:focus { left: 8px; }

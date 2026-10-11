@@ -72,6 +72,10 @@ export function splitJobMeta(stored: string): { html: string; meta: JobMeta } {
   }
 }
 
+/** Windows "printers" that make a file instead of paper (Microsoft Print to PDF, XPS Document Writer, OneNote, Fax). */
+export const isVirtualPrinter = (p: { name: string; displayName?: string }): boolean => /\b(pdf|xps|onenote|fax)\b/i.test(`${p.name} ${p.displayName ?? ''}`)
+const PAPER_NAME: Record<Paper, string> = { '58': '58 mm receipt', '80': '80 mm receipt', A4: 'A4', A5: 'A5', label: 'label' }
+
 /** A-series sheets are portrait; a document asks for landscape with a wide `@page` size (reports) or a wide page size. */
 export function isLandscapeJob(paper: Paper, html: string, widthMm: number, heightMm: number): boolean {
   if (paper !== 'A4' && paper !== 'A5') return false
@@ -310,6 +314,18 @@ export class PrintingService {
     if (!list.length || list.some((p) => p.name === deviceName)) return null
     return { fallback: list.find((p) => p.isDefault) ?? null }
   }
+  /**
+   * No printer profile for the paper: the job goes to the Windows default printer. Returns that printer when it only makes a
+   * file (PDF, OneNote...): a silent job would then "print" without any paper coming out, so the caller shows the Windows dialog.
+   */
+  private async virtualDefault(): Promise<SystemPrinter | null> {
+    try {
+      const def = (await this.adapter.listPrinters()).find((p) => p.isDefault)
+      return def && isVirtualPrinter(def) ? def : null
+    } catch {
+      return null
+    }
+  }
 
   /** What "Print darkness" of a printer profile does to a preview (same CSS the print gets). */
   printLook(a: { paper: Paper; printerProfileId?: number }): { darkness: number; logoBrightness: number; css: string; printer: string } {
@@ -359,9 +375,17 @@ export class PrintingService {
       const cal = prof?.calibration ?? parseCalibration({})
       const size = this.pageSize(a.paper, a.widthMm, a.heightMm)
       const html = prepareHtml(a.html, cal)
+      let silent = a.showDialog ? false : cal.silent
+      if (!prof && silent) {
+        const file = await this.virtualDefault()
+        if (file) {
+          silent = false
+          warning = `No ${PAPER_NAME[a.paper]} printer is set up and the Windows default printer (${file.displayName}) does not print on paper, so the Windows print dialog was shown. Add the printer under Printing > Printers to print directly.`
+        }
+      }
       const opts = {
         deviceName: printerName,
-        silent: a.showDialog ? false : cal.silent,
+        silent,
         widthMm: size.widthMm,
         heightMm: size.heightMm,
         landscape: isLandscapeJob(a.paper, a.html, size.widthMm, size.heightMm),

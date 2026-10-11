@@ -298,6 +298,18 @@ describe('printer profiles & calibration', () => {
     expect(job.html).toContain('Content-Security-Policy')
     expect(job.opts).toMatchObject({ silent: false, widthMm: 50, heightMm: 25, deviceName: 'LBL' })
   })
+  it('no profile and the Windows default only makes a file (OneNote, PDF): the dialog is shown instead of "printing" nothing', async () => {
+    const { app, fake } = setup()
+    fake.printers = [{ name: 'OneNote (Desktop)', displayName: 'OneNote (Desktop)', isDefault: true }, { name: '4BARCODE 4B-2054N', displayName: '4BARCODE 4B-2054N', isDefault: false }]
+    const r = await printing(app).print({ html: '<html><head></head><body>l</body></html>', paper: 'label', widthMm: 50, heightMm: 25 })
+    expect(fake.jobs[0].opts).toMatchObject({ silent: false, deviceName: '' })
+    expect(r.warning).toContain('No label printer is set up and the Windows default printer (OneNote (Desktop)) does not print on paper')
+    // with a profile for the paper the job goes straight to that printer
+    printing(app).savePrinterProfile({ name: 'Labels', deviceName: '4BARCODE 4B-2054N', kind: 'label', isDefault: true })
+    const ok = await printing(app).print({ html: '<html><head></head><body>l</body></html>', paper: 'label', widthMm: 50, heightMm: 25 })
+    expect(fake.jobs[1].opts).toMatchObject({ silent: true, deviceName: '4BARCODE 4B-2054N' })
+    expect(ok.warning).toBeUndefined()
+  })
   it('receipt jobs measure their own height (roll paper)', async () => {
     const { app, fake } = setup()
     await printing(app).print({ html: '<html></html>', paper: '80' })
