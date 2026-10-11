@@ -41,12 +41,12 @@ export function listenProblem(e: NodeJS.ErrnoException, port: number): string {
       return `Port ${port} is already being used by another program on this computer, so the other computer cannot connect yet. ` +
         `Close that program, or choose a different port number here (for example ${port + 1}) and use the same number on the Client system.`
     case 'EACCES':
-      return `Windows did not allow Velmayil POS to open port ${port}. Choose a different port number (for example ${port < 1024 ? 8787 : port + 1}), ` +
+      return `Windows did not allow Velmayil v3 to open port ${port}. Choose a different port number (for example ${port < 1024 ? 8787 : port + 1}), ` +
         'or ask whoever looks after this computer whether security software is blocking it.'
     case 'EADDRNOTAVAIL':
       return 'This computer has no usable network connection right now. Plug in the LAN cable and try again.'
     default:
-      return `Could not start sharing on port ${port} (${e.code ?? e.message}). Restart Velmayil POS; if it keeps happening, choose a different port number.`
+      return `Could not start sharing on port ${port} (${e.code ?? e.message}). Restart Velmayil v3; if it keeps happening, choose a different port number.`
   }
 }
 

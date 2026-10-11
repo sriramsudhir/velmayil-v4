@@ -107,14 +107,14 @@ export function explainNetworkError(e: unknown, url: string, lan: boolean): Erro
   if (err.name === 'AbortError' || err.name === 'TimeoutError' || /TIMEOUT|ETIMEDOUT/i.test(code)) {
     return new Error(
       lan
-        ? `No answer from ${who}. Check that the LAN cable is plugged in at both ends, that Velmayil POS is open on the Admin laptop, and that Windows Firewall on the Admin laptop allows Velmayil POS.`
+        ? `No answer from ${who}. Check that the LAN cable is plugged in at both ends, that Velmayil v3 is open on the Admin laptop, and that Windows Firewall on the Admin laptop allows Velmayil v3.`
         : 'Sync server timed out'
     )
   }
   if (code === 'ECONNREFUSED') {
     return new Error(
       lan
-        ? `The Admin laptop was found at ${hostOf(url)}, but Velmayil POS is not accepting connections there. Open Velmayil POS on the Admin laptop, check it is set as the Admin system, and that the port number matches.`
+        ? `The Admin laptop was found at ${hostOf(url)}, but Velmayil v3 is not accepting connections there. Open Velmayil v3 on the Admin laptop, check it is set as the Admin system, and that the port number matches.`
         : `Sync server refused the connection (${hostOf(url)})`
     )
   }

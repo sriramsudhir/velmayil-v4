@@ -46,8 +46,8 @@ function logError(what: string, e?: unknown): void {
 function showFailurePage(win: BrowserWindow, title: string, detail: string): void {
   const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const html =
-    `<!doctype html><meta charset="utf-8"><title>Velmayil POS</title><body style="font:15px Segoe UI,Arial,sans-serif;margin:48px;color:#222">` +
-    `<h2>${esc(title)}</h2><p>Your saved bills and stock are safe. Close this window and start Velmayil POS again.</p>` +
+    `<!doctype html><meta charset="utf-8"><title>Velmayil v3</title><body style="font:15px Segoe UI,Arial,sans-serif;margin:48px;color:#222">` +
+    `<h2>${esc(title)}</h2><p>Your saved bills and stock are safe. Close this window and start Velmayil v3 again.</p>` +
     `<p>If this keeps happening, send this to support:</p>` +
     `<pre style="white-space:pre-wrap;background:#f3f3f3;padding:12px;border-radius:6px">${esc(detail)}${logFile ? '\n\nLog file: ' + esc(logFile) : ''}</pre></body>`
   if (!win.isDestroyed()) void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(() => undefined)
@@ -61,7 +61,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     autoHideMenuBar: true,
-    title: 'Velmayil POS',
+    title: 'Velmayil v3',
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: false }
   })
   mainWindow = win
@@ -99,7 +99,7 @@ function createWindow(): void {
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     if (!isMainFrame || code === -3) return // -3 = aborted (a newer navigation replaced this one)
     logError('window failed to load:', `${code} ${desc} ${url}`)
-    if (!url.startsWith('data:')) showFailurePage(win, 'Velmayil POS could not load its screen', `${desc} (${code})\n${url}`)
+    if (!url.startsWith('data:')) showFailurePage(win, 'Velmayil v3 could not load its screen', `${desc} (${code})\n${url}`)
     if (!win.isDestroyed() && !win.isVisible()) win.show()
   })
   win.on('unresponsive', () => logError('window unresponsive'))
@@ -141,7 +141,7 @@ function bootstrap(): void {
   try {
     mkdirSync(userData, { recursive: true })
   } catch (e) {
-    dialog.showErrorBox('Velmayil POS cannot use its data folder', `${(e as Error).message}\n\nData folder: ${userData}\n\nCheck that this Windows user may write to that folder.`)
+    dialog.showErrorBox('Velmayil v3 cannot use its data folder', `${(e as Error).message}\n\nData folder: ${userData}\n\nCheck that this Windows user may write to that folder.`)
     electronApp.exit(1)
     return
   }
@@ -155,7 +155,7 @@ function bootstrap(): void {
     core = new App({ dbPath: join(userData, 'velmayil.db'), userDataDir: userData })
   } catch (e) {
     logError('cannot open database:', e)
-    dialog.showErrorBox('Velmayil POS cannot open its database', `${(e as Error).message}\n\nData folder: ${userData}\n\nRestore a backup or contact support.`)
+    dialog.showErrorBox('Velmayil v3 cannot open its database', `${(e as Error).message}\n\nData folder: ${userData}\n\nRestore a backup or contact support.`)
     electronApp.exit(1)
     return
   }
@@ -216,7 +216,7 @@ if (!gotLock) {
   })
   electronApp.whenReady().then(bootstrap).catch((e) => {
     logError('failed to start:', e)
-    dialog.showErrorBox('Velmayil POS failed to start', String((e as Error)?.stack ?? e))
+    dialog.showErrorBox('Velmayil v3 failed to start', String((e as Error)?.stack ?? e))
     electronApp.exit(1)
   })
   electronApp.on('activate', () => core && BrowserWindow.getAllWindows().length === 0 && createWindow())

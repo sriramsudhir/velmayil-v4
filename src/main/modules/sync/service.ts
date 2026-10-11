@@ -295,7 +295,7 @@ export class SyncService {
         const h = await t.health().catch((e: Error) => e)
         if (h instanceof Error) return { ok: false, error: h.message, kind: 'network' }
         if (h.app !== 'velmayil-pos' || h.role !== 'admin') {
-          return { ok: false, error: `Something answered at ${addressOf(url)}, but it is not a Velmayil POS Admin system. Check the address and port.`, kind: 'network' }
+          return { ok: false, error: `Something answered at ${addressOf(url)}, but it is not a Velmayil v3 Admin system. Check the address and port.`, kind: 'network' }
         }
         if (!key) return { ok: false, error: `Found the Admin system ${h.code ?? ''} at ${addressOf(url)}. Now type the pairing code shown on it.`, kind: 'auth' }
         const p = await t.ping()

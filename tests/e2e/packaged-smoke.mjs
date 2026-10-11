@@ -7,7 +7,7 @@ import { join } from 'node:path'
 delete process.env.ELECTRON_RUN_AS_NODE
 const dir = mkdtempSync(join(tmpdir(), 'velmayil-pkg-'))
 const app = await electron.launch({
-  executablePath: join(process.cwd(), 'release', 'win-unpacked', 'Velmayil POS.exe'),
+  executablePath: join(process.cwd(), 'release', 'win-unpacked', 'Velmayil v3.exe'),
   args: ['--user-data-dir=' + join(dir, 'chromium')],
   env: { ...process.env, VELMAYIL_DATA_DIR: dir }
 })

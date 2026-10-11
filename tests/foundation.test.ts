@@ -41,7 +41,7 @@ describe('foundation', () => {
   })
   it('rpc dispatch requires session', async () => {
     const app = createTestApp()
-    expect(((await app.call('app', 'info')) as { name: string }).name).toBe('Velmayil POS')
+    expect(((await app.call('app', 'info')) as { name: string }).name).toBe('Velmayil v3')
     app.session = null
     await expect(app.call('catalog', 'nothing')).rejects.toThrow()
   })

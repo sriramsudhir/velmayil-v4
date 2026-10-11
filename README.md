@@ -1,4 +1,4 @@
-# Velmayil POS
+# Velmayil v3
 
 Offline-first Windows desktop point-of-sale for retail / fireworks shops.
 Electron + TypeScript + React + built-in SQLite (`node:sqlite`, no native modules).
