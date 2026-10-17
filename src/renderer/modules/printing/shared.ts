@@ -24,6 +24,12 @@ export interface PrinterProfile {
     logoBrightness?: number
     dpi?: 203 | 300 | 600
     densityCommand?: boolean
+    /** label printers: send labels as TSPL commands, one picture per label at the printer's resolution (past the Windows driver) */
+    tspl?: boolean
+    /** TSPL: gap between labels on the roll (mm), 0 = continuous */
+    labelGapMm?: number
+    /** TSPL: turn the print round by 180 degrees */
+    flip?: boolean
   }
   isDefault: boolean
 }

@@ -367,6 +367,28 @@ export const TEST_TEMPLATE = `<!doctype html><html lang="en"><head><meta charset
 <div class="info">Scan this barcode: it must read {{test.code}}. Bars are sized for a {{test.dpi}} dpi printer.</div></div>
 </div></body></html>`
 
+/** Test print on a label printer: ONE label of the label size (the full test page would run over five labels and cut its ruler). */
+export const TEST_LABEL_TEMPLATE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Test label</title><style>{{{css}}}</style></head><body><div class="sheet"><div class="label tl">
+<div class="t1">{{shop.display_name}}</div>
+<div class="t2">TEST {{test.width}} x {{test.height}} &middot; {{test.dpi}} dpi &middot; Print darkness {{test.darkness}} of 9</div>
+<div class="bars">{{test.barcode}}</div>
+<div class="code">{{test.code}} <span class="hint">scan: it must read {{test.code}}</span></div>
+<div class="ruler">{{#ticks}}<span class="tick{{#major}} major{{/major}}" style="left:{{left}}mm">{{#label}}<i>{{label}}</i>{{/label}}</span>{{/ticks}}</div>
+</div></div></body></html>`
+
+export const testLabelCss = (cfg: TemplateConfig, printableMm: number) => {
+  const h = labelBoxMm(cfg).h
+  return (
+    baseCss(cfg) +
+    `@page{size:${cfg.paperWidthMm}mm ${cfg.paperHeightMm}mm;margin:0}` +
+    `.sheet{width:${cfg.paperWidthMm}mm;height:${h}mm;overflow:hidden}` +
+    `.label{width:${cfg.paperWidthMm}mm;height:${h}mm;padding:${cfg.marginTopMm}mm ${cfg.marginRightMm}mm ${cfg.marginBottomMm}mm ${cfg.marginLeftMm}mm;display:flex;flex-direction:column;justify-content:space-between;align-items:center;overflow:hidden;text-align:center}` +
+    `@media screen{.label{outline:1px dashed #999;outline-offset:-1px}}` +
+    `.t1{font-weight:700;font-size:7pt;line-height:1.1}.t2{font-size:5.5pt;line-height:1.1}.bars{width:100%}.code{font-size:6pt;letter-spacing:.06em;line-height:1.1}.code .hint{letter-spacing:0;font-size:5pt}` +
+    `.ruler{position:relative;width:${printableMm}mm;height:2.6mm;border-bottom:.3mm solid #000}.tick{position:absolute;bottom:0;width:0;height:1.2mm;border-left:.3mm solid #000}.tick.major{height:2.2mm}.tick i{display:none}`
+  )
+}
+
 export const testCss = (cfg: TemplateConfig, printableMm: number) =>
   baseCss(cfg) +
   shopNameCss(cfg) +

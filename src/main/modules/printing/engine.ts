@@ -3,7 +3,7 @@ import type { BusinessProfile } from '@shared/types'
 import { barcodeSymbol, DEFAULT_DPI, dotMm, minModuleDots, type BarcodeSymbol } from './barcode'
 import { isInvoiceKind, normalizeConfig, type InvoiceKind, type LabelKind, type Paper, type ReportKind, type TemplateConfig, type TemplateKind } from './config'
 import { fmtDate, fmtDateTime, invoiceContext, logoVars, planLogo, shopVars, type InvoiceDocExt, type LogoSource } from './context'
-import { INVOICE_LAYOUTS, LABEL_LAYOUTS, labelBoxMm, labelCellMm, REPORT_LAYOUT, TEST_TEMPLATE, testCss } from './layouts'
+import { INVOICE_LAYOUTS, LABEL_LAYOUTS, labelBoxMm, labelCellMm, REPORT_LAYOUT, TEST_LABEL_TEMPLATE, TEST_TEMPLATE, testCss, testLabelCss } from './layouts'
 import { renderTemplate, Safe } from './mustache'
 
 /**
@@ -239,17 +239,18 @@ export function renderTestPage(paper: Paper, profile: BusinessProfile, rawConfig
     cityLine: !!(profile.city || profile.state) && cfg.showAddress,
     phone: !!profile.phone && cfg.showPhone
   }
-  const html = renderTemplate(TEST_TEMPLATE, {
+  const onLabel = paper === 'label' && cfg.paperHeightMm > 0 && !(cfg.sheetCols > 0 && cfg.sheetRows > 0)
+  const html = renderTemplate(onLabel ? TEST_LABEL_TEMPLATE : TEST_TEMPLATE, {
     shop: shopVars(profile, plan),
     logo: logoVars(plan),
     show,
     test: {
       paper: paper === 'label' ? 'LABEL' : paper === 'A4' || paper === 'A5' ? paper : `${paper} mm`, width: `${cfg.paperWidthMm} mm`, height: cfg.paperHeightMm ? `${cfg.paperHeightMm} mm` : 'auto', printable, when: fmtDateTime(Date.now()),
       darkness: printer.darkness ?? 5, dpi: printer.dpi ?? DEFAULT_DPI, code: TEST_BARCODE,
-      barcode: new Safe(barcodeSymbol(TEST_BARCODE, { heightMm: 8, format: 'CODE128', maxWidthMm: Math.min(printable, 60), dpi: printer.dpi, scale: printer.scale, originMm: cfg.marginLeftMm }).svg)
+      barcode: new Safe(barcodeSymbol(TEST_BARCODE, { heightMm: onLabel ? Math.max(4, Math.min(8, cfg.paperHeightMm * 0.28)) : 8, format: 'CODE128', maxWidthMm: Math.min(printable, 60), dpi: printer.dpi, scale: printer.scale, originMm: cfg.marginLeftMm }).svg)
     },
     ticks,
-    css: testCss(cfg, printable)
+    css: onLabel ? testLabelCss(cfg, printable) : testCss(cfg, printable)
   })
   return { html, widthMm: cfg.paperWidthMm, heightMm: cfg.paperHeightMm }
 }

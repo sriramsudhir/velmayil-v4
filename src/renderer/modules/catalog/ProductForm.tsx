@@ -2,6 +2,7 @@ import { beepOk } from '@/ui/sound'
 import { useEffect, useState } from 'react'
 import { Button, Field, Input, Modal, Select, TextArea, useToast } from '@/ui'
 import { call, errMsg } from '@/lib/api'
+import { useSession } from '@/lib/session'
 import { stripScanDecorations } from '@shared/scanCode'
 import { useScanner } from '@/lib/useScanner'
 import { LabelPrintDialog } from '@/modules/printing/LabelPrintDialog'
@@ -27,6 +28,9 @@ interface VariantDraft {
   cost: string
   reorderLevel: string
   openingStock: string
+  /** existing variant: stock in hand when the form was opened, and what is typed now (a change is saved as a stock correction) */
+  stock?: number
+  stockText?: string
   active: boolean
   barcodeHint?: string
   /** the code in the field came from "Generate" and is not saved yet (cleared as soon as the field is edited) */
@@ -44,6 +48,7 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
   reloadTaxonomy: () => void
 }) {
   const toast = useToast()
+  const { can } = useSession()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -118,7 +123,7 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
         }
         setVariants(p.variants.map((v) => ({
           id: v.id, name: v.name, sku: v.sku, barcode: v.barcode ?? '', aliases: v.aliases.join(', '), mrp: rupees(v.mrp), price: rupees(v.price),
-          cost: rupees(v.cost), reorderLevel: String(v.reorderLevel), openingStock: '', active: v.active
+          cost: rupees(v.cost), reorderLevel: String(v.reorderLevel), openingStock: '', stock: v.stock, stockText: String(v.stock), active: v.active
         })))
       })
       .catch((e) => setError(errMsg(e)))
@@ -223,6 +228,10 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
       if (!Number.isInteger(reorder) || reorder < 0) return setError(`${label}: reorder level must be a whole number`)
       const opening = v.openingStock.trim() === '' ? undefined : Number(v.openingStock)
       if (opening !== undefined && (!Number.isInteger(opening) || opening < 0)) return setError(`${label}: opening stock must be a whole number`)
+      if (v.id && trackStock && v.stockText != null && v.stockText.trim() !== String(v.stock)) {
+        const q = Number(v.stockText.trim())
+        if (v.stockText.trim() === '' || !Number.isInteger(q) || q < 0) return setError(`${label}: stock in hand must be a whole number (0 or more)`)
+      }
       out.push({
         id: v.id, name: v.name.trim(), sku: v.sku.trim() || undefined, barcode: v.barcode.trim() || null,
         aliases: v.aliases.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean),
@@ -252,8 +261,23 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
         if (!confirm(`${d.inStock ?? 'Some'} unit code(s) are still in stock. Turn off unit codes anyway? The codes are voided; stock quantity is not changed.`)) return
         saved = await call<{ id: number }>('catalog', 'save', { ...body, discardUnits: true })
       }
+      // stock in hand changed on existing variants: each change is recorded as a stock correction
+      const notes: string[] = []
+      for (const v of variants) {
+        if (!v.id || !trackStock || v.stockText == null || v.stockText.trim() === String(v.stock)) continue
+        const label = v.name || name.trim()
+        try {
+          const r = await call<{ delta: number; stock: number; unitCodes: string[]; removedLabelled: string[] }>('inventory', 'setStock', { variantId: v.id, qty: Number(v.stockText.trim()), expected: v.stock })
+          if (r.delta) notes.push(`${label}: stock ${r.delta > 0 ? 'increased' : 'reduced'} to ${r.stock}${r.removedLabelled.length ? `. Labels no longer valid (throw them away if printed): ${r.removedLabelled.length <= 6 ? r.removedLabelled.join(', ') : `${r.removedLabelled.slice(0, 3).join(', ')} ... and ${r.removedLabelled.length - 3} more`}` : ''}`)
+          setVariants((vs) => vs.map((x) => (x.id === v.id ? { ...x, stock: r.stock, stockText: String(r.stock) } : x)))
+        } catch (e) {
+          setError(`${label}: the product was saved, but the stock was not changed: ${errMsg(e)}`)
+          onSaved()
+          return
+        }
+      }
       beepOk()
-      toast(productId ? 'Product updated' : 'Product created', 'good')
+      toast(notes.length ? `${productId ? 'Product updated' : 'Product created'}. ${notes.join('. ')}` : productId ? 'Product updated' : 'Product created', 'good')
       onSaved()
       // tracking was just turned on (or a new tracked product got opening stock): the stock was given unit codes, offer their labels now
       if (trackUnits && !wasTracked && saved?.id) {
@@ -416,6 +440,16 @@ export function ProductForm({ productId, open, onClose, onSaved, categories, bra
             <Field label="Cost ₹"><Input inputMode="decimal" value={v.cost} onChange={(e) => setV(i, { cost: e.target.value })} /></Field>
             <Field label="Reorder level"><Input inputMode="numeric" value={v.reorderLevel} onChange={(e) => setV(i, { reorderLevel: e.target.value })} /></Field>
             {!v.id && trackStock && <Field label="Opening stock"><Input inputMode="numeric" value={v.openingStock} onChange={(e) => setV(i, { openingStock: e.target.value })} /></Field>}
+            {v.id && trackStock && v.stockText != null && (
+              <Field
+                label="Stock in hand"
+                hint={!can('inventory.adjust') ? 'Changing stock needs the "Stock adjustments" permission'
+                  : v.stockText.trim() !== String(v.stock) ? `Was ${v.stock}. Saved as a stock correction${trackUnits ? '; label numbers are added or removed to match' : ''}.`
+                    : 'Type the real count to correct it (also a wrong opening stock)'}
+              >
+                <Input inputMode="numeric" aria-label="Stock in hand" data-testid="stock-in-hand" value={v.stockText} disabled={!can('inventory.adjust')} onChange={(e) => setV(i, { stockText: e.target.value })} />
+              </Field>
+            )}
           </div>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <label><input type="checkbox" checked={v.active} onChange={(e) => setV(i, { active: e.target.checked })} /> Variant active</label>

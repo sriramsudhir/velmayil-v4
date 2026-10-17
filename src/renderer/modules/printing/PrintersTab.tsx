@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { call } from '@/lib/api'
 import { useSession } from '@/lib/session'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, FormGrid, InlineAlert, Input, Modal, NumberInput, Select, Spinner, Table, Toggle, useApiAction, useAsync, useConfirm } from '@/ui'
+import { isTsplPrinterName } from '@shared/labelPrinters'
 import { DARKNESS_LABEL, DRIVER_DENSITY_HINT, LOGO_BRIGHTNESS_LABEL, PAPER_FOR_PRINTER_KIND, PRINTER_KIND_LABEL, type PrinterProfile, type PrintResult, type SystemPrinter } from './shared'
 
-const blank = (): PrinterProfile => ({ id: 0, name: '', deviceName: '', kind: 'receipt58', calibration: { offsetXmm: 0, offsetYmm: 0, scalePct: 100, silent: true, darkness: 5, logoBrightness: 5, dpi: 203, densityCommand: true }, isDefault: false })
+const blank = (): PrinterProfile => ({ id: 0, name: '', deviceName: '', kind: 'receipt58', calibration: { offsetXmm: 0, offsetYmm: 0, scalePct: 100, silent: true, darkness: 5, logoBrightness: 5, dpi: 203, densityCommand: true, tspl: false, labelGapMm: 2, flip: false }, isDefault: false })
 
 const LEVELS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
@@ -84,7 +85,7 @@ export function PrintersTab() {
             { key: 'name', header: 'Name', render: (p) => <strong>{p.name}</strong> },
             { key: 'kind', header: 'Paper', render: (p) => PRINTER_KIND_LABEL[p.kind] },
             { key: 'device', header: 'Windows printer', render: (p) => (missing(p) ? <span>{p.deviceName} <Badge tone="bad">Not found</Badge></span> : p.deviceName || 'Windows default') },
-            { key: 'cal', header: 'Settings', render: (p) => `${p.calibration.raw ? 'Raw ESC/POS' : p.calibration.silent ? 'Prints directly' : 'Shows the Windows dialog'}${p.calibration.drawerKick ? ', opens drawer' : ''} · darkness ${p.calibration.darkness ?? 5} · ${p.calibration.dpi ?? 203} dpi · x ${p.calibration.offsetXmm} mm, y ${p.calibration.offsetYmm} mm, ${p.calibration.scalePct}%` },
+            { key: 'cal', header: 'Settings', render: (p) => `${p.calibration.raw ? 'Raw ESC/POS' : p.kind === 'label' && p.calibration.tspl ? 'Direct (TSPL)' : p.calibration.silent ? 'Prints directly' : 'Shows the Windows dialog'}${p.calibration.drawerKick ? ', opens drawer' : ''} · darkness ${p.calibration.darkness ?? 5} · ${p.calibration.dpi ?? 203} dpi · x ${p.calibration.offsetXmm} mm, y ${p.calibration.offsetYmm} mm, ${p.calibration.scalePct}%` },
             { key: 'def', header: '', render: (p) => (p.isDefault ? <Badge tone="good">Default</Badge> : null) },
             {
               key: 'actions', header: '', align: 'right',
@@ -130,7 +131,11 @@ export function PrintersTab() {
               </Field>
             </FormGrid>
             <Field label="Windows printer" hint="'Windows default' uses whichever printer Windows has set as default.">
-              <Select value={edit.deviceName} onChange={(e) => setEdit({ ...edit, deviceName: e.target.value })}>
+              <Select value={edit.deviceName} onChange={(e) => {
+                const deviceName = e.target.value
+                // a new label profile for a TSC-compatible printer starts with direct printing on (the sharp way)
+                setEdit({ ...edit, deviceName, ...(!edit.id && edit.kind === 'label' ? { calibration: { ...edit.calibration, tspl: isTsplPrinterName(deviceName) } } : {}) })
+              }}>
                 <option value="">Windows default</option>
                 {(system.data ?? []).map((s) => <option key={s.name} value={s.name}>{s.displayName}</option>)}
                 {edit.deviceName && !(system.data ?? []).some((s) => s.name === edit.deviceName) && <option value={edit.deviceName}>{edit.deviceName} (not found)</option>}
@@ -168,6 +173,26 @@ export function PrintersTab() {
               <Field label="Move down (mm)" hint="Negative moves the print up"><NumberInput value={cal.offsetYmm} step={0.5} decimals={1} min={-20} max={20} onChange={(n) => setCal({ offsetYmm: n ?? 0 })} /></Field>
               <Field label="Scale (%)" hint="Keep 100 unless the ruler on the test page measures wrong"><NumberInput value={cal.scalePct} step={1} min={50} max={150} onChange={(n) => setCal({ scalePct: n ?? 100 })} /></Field>
             </FormGrid>
+            {edit.kind === 'label' && (
+              <div style={{ marginTop: 12, padding: 10, border: '1px solid var(--line)', borderRadius: 8 }} data-testid="label-printer-box">
+                <strong>Label printer</strong>
+                <p className="muted" style={{ margin: '4px 0 8px' }}>
+                  Direct printing sends every label as one picture drawn at the printer's own resolution, in the printer's language (TSPL), past the Windows driver.
+                  Labels come out exactly the right size with sharp text and bars, and the label size in the Windows driver no longer matters.
+                  It works with TSC-compatible label printers (4BARCODE, TSC, Xprinter, Gprinter, HPRT, Rongta, TVS ...). After switching it on, press Save and test print: if the
+                  test label does not come out, or comes out as gibberish, switch it off again.
+                </p>
+                <Toggle checked={!!cal.tspl} onChange={(v) => setCal({ tspl: v })} label="Print labels directly in the printer's language (TSPL, sharpest)" />
+                {cal.tspl && (
+                  <FormGrid cols={2}>
+                    <Field label="Gap between labels (mm)" hint="The see-through gap between two labels on the roll, usually 2 or 3 mm. 0 for continuous paper.">
+                      <NumberInput value={cal.labelGapMm ?? 2} step={0.5} decimals={1} min={0} max={20} onChange={(n) => setCal({ labelGapMm: n ?? 2 })} />
+                    </Field>
+                    <div style={{ alignSelf: 'center' }}><Toggle checked={!!cal.flip} onChange={(v) => setCal({ flip: v })} label="Labels come out upside down: turn them round" /></div>
+                  </FormGrid>
+                )}
+              </div>
+            )}
             <Toggle checked={cal.silent} onChange={(v) => setCal({ silent: v })} label="Print directly, without the Windows print dialog" />
             {thermal && (
               <div style={{ marginTop: 12, padding: 10, border: '1px solid var(--line)', borderRadius: 8 }}>

@@ -350,6 +350,42 @@ export class InventoryService {
     })
   }
 
+  /**
+   * "Stock in hand" typed on the product screen (also how a wrong opening stock is put right). The difference to the stock the
+   * user saw (`expected`, all locations) is recorded as a stock correction at the default location, with the audit trail of any
+   * adjustment. Unit-coded products: more stock gets new unit codes; less stock voids pieces without a printed label first, then
+   * the most recently numbered ones (their labels, if printed, are then no longer valid: the codes are returned).
+   */
+  setStock(args: unknown): { delta: number; stock: number; unitCodes: string[]; removedLabelled: string[] } {
+    this.app.requirePermission('inventory.adjust')
+    const a = parse(z.object({ variantId: id, qty: z.number().int().min(0).max(10_000_000), expected: z.number().int(), note: text(500).optional() }), args)
+    const variant = this.app.lookup.byId(a.variantId)
+    if (!variant) throw new AppError('NOT_FOUND', 'Product variant not found')
+    if (!variant.trackStock) throw new AppError('VALIDATION', 'This product does not track stock')
+    const now = this.db.value<number>('SELECT COALESCE(SUM(qty),0) FROM stock_levels WHERE variant_id = ?', a.variantId) ?? 0
+    if (now !== a.expected)
+      throw new AppError('CONFLICT', `${variant.displayName}: the stock changed to ${now} while this screen was open (a sale or another computer). Nothing was changed; open the product again.`, { code: 'STOCK_CHANGED', stock: now })
+    const delta = a.qty - now
+    if (delta === 0) return { delta: 0, stock: now, unitCodes: [], removedLabelled: [] }
+    const loc = this.app.defaultLocationId()
+    const here = this.db.value<number>('SELECT qty FROM stock_levels WHERE variant_id = ? AND location_id = ?', a.variantId, loc) ?? 0
+    if (delta < 0 && here + delta < 0)
+      throw new AppError('VALIDATION', `${variant.displayName}: only ${here} in stock at the main location; correct the other locations under Stock > Adjustments`, { code: 'NOT_ENOUGH_HERE', here })
+    const units = this.units
+    const tracked = !!units && variant.trackUnits
+    const picked = tracked && delta < 0 ? units!.pickForRemoval(a.variantId, -delta, loc) : undefined
+    if (picked && picked.length < -delta)
+      throw new AppError('VALIDATION', `${variant.displayName}: only ${picked.length} piece(s) with a unit code are in stock at the main location`, { code: 'UNIT_CODES_REQUIRED' })
+    const labelled = new Set(
+      picked?.length ? this.db.all<{ code: string }>(`SELECT code FROM product_units WHERE label_printed_at IS NOT NULL AND code IN (${picked.map(() => '?').join(',')})`, ...picked).map((r) => r.code) : []
+    )
+    const r = this.adjust({
+      variantId: a.variantId, locationId: loc, delta, reason: delta > 0 ? 'found' : 'correction',
+      note: a.note ?? `Stock in hand corrected from ${now} to ${a.qty}`, ...(picked ? { unitCodes: picked } : {})
+    }) as { unitCodes: string[] }
+    return { delta, stock: a.qty, unitCodes: r.unitCodes, removedLabelled: r.unitCodes.filter((c) => labelled.has(c)) }
+  }
+
   adjustments(args: unknown): Page<Record<string, unknown>> {
     this.app.requirePermission('inventory.view')
     const a = parse(z.object({ variantId: id.optional(), reason: z.enum(ADJUST_REASONS).optional(), from: z.number().int().optional(), to: z.number().int().optional(), ...page }), args)

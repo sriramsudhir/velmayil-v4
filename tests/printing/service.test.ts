@@ -303,7 +303,18 @@ describe('printer profiles & calibration', () => {
     fake.printers = [{ name: 'OneNote (Desktop)', displayName: 'OneNote (Desktop)', isDefault: true }, { name: '4BARCODE 4B-2054N', displayName: '4BARCODE 4B-2054N', isDefault: false }]
     const r = await printing(app).print({ html: '<html><head></head><body>l</body></html>', paper: 'label', widthMm: 50, heightMm: 25 })
     expect(fake.jobs[0].opts).toMatchObject({ silent: false, deviceName: '' })
-    expect(r.warning).toContain('No label printer is set up and the Windows default printer (OneNote (Desktop)) does not print on paper')
+    expect(r.warning).toContain('No label printer is set up, so the Windows print dialog was shown')
+    // other papers: the dialog only when the Windows default makes a file
+    const a4 = await printing(app).print({ html: '<html><head></head><body>x</body></html>', paper: 'A4' })
+    expect(fake.jobs[1].opts).toMatchObject({ silent: false, deviceName: '' })
+    expect(a4.warning).toContain('No A4 printer is set up and the Windows default printer (OneNote (Desktop)) does not print on paper')
+    fake.printers = [{ name: 'Brother', displayName: 'Brother', isDefault: true }]
+    await printing(app).print({ html: '<html><head></head><body>x</body></html>', paper: 'A4' })
+    expect(fake.jobs[2].opts).toMatchObject({ silent: true })
+    // a label never goes silently to an office printer
+    await printing(app).print({ html: '<html><head></head><body>l</body></html>', paper: 'label', widthMm: 50, heightMm: 25 })
+    expect(fake.jobs[3].opts).toMatchObject({ silent: false })
+    fake.jobs.splice(0, 3)
     // with a profile for the paper the job goes straight to that printer
     printing(app).savePrinterProfile({ name: 'Labels', deviceName: '4BARCODE 4B-2054N', kind: 'label', isDefault: true })
     const ok = await printing(app).print({ html: '<html><head></head><body>l</body></html>', paper: 'label', widthMm: 50, heightMm: 25 })
@@ -328,10 +339,14 @@ describe('test print', () => {
     expect(fake.jobs).toHaveLength(4)
     for (const j of fake.jobs) {
       expect(j.html).toContain('Test Shop')
-      expect(j.html).toContain('1 Main Road')
       expect(j.html).toContain('class="ruler"')
+    }
+    // receipts and sheets: address and logo too; the label printer gets one test label
+    for (const j of fake.jobs.slice(0, 3)) {
+      expect(j.html).toContain('1 Main Road')
       expect(j.html).toContain('<img class="logo"')
     }
+    expect(fake.jobs[3].html).toContain('Print darkness 5 of 9')
     expect(fake.jobs[0].opts.widthMm).toBe(58)
     expect(fake.jobs[2].opts.widthMm).toBe(210)
   })

@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parseDpi, snapBarcodes, type PrinterDpi } from './barcode'
+import { DEFAULT_LABEL_GAP_MM, toMono, type MonoBitmap } from './tspl'
 
 /**
  * Everything that touches Electron's printing stack lives behind this interface so tests can inject a fake printer
@@ -29,6 +30,8 @@ export interface PrintAdapter {
   listPrinters(): Promise<SystemPrinter[]>
   /** Ask the user where to save a PDF (suggested file name). null = cancelled. Optional: absent in tests/headless. */
   chooseSavePath?(suggestedName: string): Promise<string | null>
+  /** Draw every label of a label document as a 1-bit picture at the printer's resolution (direct TSPL printing). */
+  rasterLabels?(html: string, o: { widthMm: number; heightMm: number; dpi: number }): Promise<MonoBitmap[]>
 }
 
 // ---------------------------------------------------------------------------- pure helpers (testable)
@@ -57,6 +60,15 @@ export interface Calibration {
   dpi: PrinterDpi
   /** Raw ESC/POS only: also send the printer's own density command (GS ( K) when darkness is not 5. */
   densityCommand: boolean
+  /**
+   * Label printers only. ON: labels go to the printer as TSPL commands with one picture per label drawn at the printer's own
+   * resolution, past the Windows driver (sharpest print, exact label size). For TSC-compatible printers (4BARCODE, TSC, Xprinter ...).
+   */
+  tspl: boolean
+  /** TSPL: gap between two labels on the roll in mm (0 = continuous paper). */
+  labelGapMm: number
+  /** TSPL: turn the print round by 180 degrees. */
+  flip: boolean
 }
 export const DARKNESS_NORMAL = 5
 const level = (n: unknown): number => Math.round(clamp(n, 1, 9, DARKNESS_NORMAL))
@@ -77,7 +89,10 @@ export function parseCalibration(raw: unknown): Calibration {
     darkness: level(o.darkness),
     logoBrightness: level(o.logoBrightness),
     dpi: parseDpi(o.dpi),
-    densityCommand: o.densityCommand !== false
+    densityCommand: o.densityCommand !== false,
+    tspl: o.tspl === true,
+    labelGapMm: clamp(o.labelGapMm, 0, 20, DEFAULT_LABEL_GAP_MM),
+    flip: o.flip === true
   }
 }
 
@@ -106,6 +121,18 @@ export function darknessCss(darkness: unknown, logoBrightness: unknown = DARKNES
   if (i < 0) css += `img{filter:brightness(${(1 - i * 0.12).toFixed(2)})}`
   if (!css) return ''
   return css + 'svg.barcode,svg.barcode *,svg.qr,svg.qr *{filter:none!important;-webkit-text-stroke:0!important;stroke:none!important;shape-rendering:crispEdges!important}'
+}
+
+/** The top-left w x h dots of a 1-bit picture (white where the picture is smaller). */
+export function cropMono(m: MonoBitmap, w: number, h: number): MonoBitmap {
+  if (m.width === w && m.height === h) return m
+  const src = Math.ceil(m.width / 8)
+  const dst = Math.ceil(w / 8)
+  const bits = Buffer.alloc(dst * h)
+  for (let y = 0; y < Math.min(h, m.height); y++) {
+    for (let x = 0; x < Math.min(w, m.width); x++) if (m.bits[y * src + (x >> 3)] & (0x80 >> (x & 7))) bits[y * dst + (x >> 3)] |= 0x80 >> (x & 7)
+  }
+  return { width: w, height: h, bits }
 }
 
 export const CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">`
@@ -244,6 +271,77 @@ export class ElectronPrintAdapter implements PrintAdapter {
         pageSize: { width: size.width / 25400, height: size.height / 25400 }
       })
     })
+  }
+
+  /**
+   * Every label of the document as a 1-bit picture of exactly widthMm x heightMm at `dpi` (one pixel = one printer dot): the page
+   * is drawn off screen, zoomed so one CSS inch is `dpi` pixels, one label at a time. A document without label boxes (the test
+   * page) is cut into label-high slices.
+   */
+  async rasterLabels(html: string, o: { widthMm: number; heightMm: number; dpi: number }): Promise<MonoBitmap[]> {
+    const { BrowserWindow } = electron()
+    const w = Math.max(8, Math.round((o.widthMm * o.dpi) / 25.4))
+    const h = Math.max(8, Math.round((o.heightMm * o.dpi) / 25.4))
+    const zoom = o.dpi / 96
+    const dir = join(this.userDataDir, 'print-tmp')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `labels-${randomUUID()}.html`)
+    // no screen-only outlines / gaps: the picture is the label and nothing else
+    const css = 'html,body{margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}.label{outline:none!important;border:0!important;margin:0!important}.sheet{margin:0!important}'
+    writeFileSync(file, /<\/head>/i.test(html) ? html.replace(/<\/head>/i, () => `<style>${css}</style></head>`) : `<style>${css}</style>${html}`, 'utf8')
+    const win = new BrowserWindow({
+      show: false, width: w, height: h, useContentSize: true, enableLargerThanScreen: true, frame: false,
+      webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false, zoomFactor: zoom }
+    })
+    win.webContents.on('will-navigate', (e) => e.preventDefault())
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    const pageCss = (o.heightMm * 96) / 25.4
+    const frame = 'new Promise(function(r){requestAnimationFrame(function(){requestAnimationFrame(function(){r(1)})})})'
+    const boxesJs = "var s=document.querySelectorAll('.sheet');if(!s.length)s=document.querySelectorAll('.label');"
+    const job = (async () => {
+      await win.loadFile(file)
+      win.webContents.setZoomFactor(zoom)
+      win.setContentSize(w, h)
+      // one key per label box (its markup): copies of the same label are drawn once
+      const keys = (await win.webContents.executeJavaScript(
+        'Promise.all(Array.from(document.images).map(function(i){return i.decode?i.decode().catch(function(){}):0})).then(function(){' +
+          boxesJs + `if(s.length)return Array.prototype.map.call(s,function(e){return e.innerHTML});` +
+          `var n=Math.max(1,Math.min(8,Math.ceil(document.documentElement.scrollHeight/${pageCss}-0.05)));var a=[];for(var k=0;k<n;k++)a.push('slice'+k);return a})`
+      )) as string[]
+      const boxes = !keys[0]?.startsWith('slice')
+      const drawn = new Map<string, MonoBitmap>()
+      const out: MonoBitmap[] = []
+      for (let i = 0; i < Math.min(keys.length, 5000); i++) {
+        const seen = drawn.get(keys[i])
+        if (seen) { out.push(seen); continue }
+        await win.webContents.executeJavaScript(
+          boxes
+            ? `(function(i){${boxesJs}for(var j=0;j<s.length;j++)s[j].style.display=j===i?'':'none';window.scrollTo(0,0);return ${frame}})(${i})`
+            : `(function(i){window.scrollTo(0,i*${pageCss});return ${frame}})(${i})`
+        )
+        const img = await win.webContents.capturePage()
+        const size = img.getSize()
+        // the capture can be a pixel larger than the label (rounding): cut the label out, never resample it (that smears bars)
+        const mono = toMono(img.toBitmap(), size.width, size.height, { order: process.platform === 'win32' ? 'bgra' : 'rgba' })
+        const label = cropMono(mono, w, h)
+        drawn.set(keys[i], label)
+        out.push(label)
+      }
+      return out
+    })()
+    try {
+      return await withTimeout(job, PRINT_TIMEOUT_MS * 3, () => {
+        throw new Error('Drawing the labels took too long. Print fewer labels at a time.')
+      })
+    } finally {
+      job.catch(() => undefined)
+      if (!win.isDestroyed()) win.destroy()
+      try {
+        rmSync(file, { force: true })
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async listPrinters(): Promise<SystemPrinter[]> {

@@ -7,7 +7,8 @@ import {
   type LabelChoice, type LabelOptions
 } from '@shared/labelSizes'
 import { PrintPreview } from './PrintPreview'
-import type { PrintResult, Rendered, TemplateRow } from './shared'
+import type { PrinterProfile, PrintResult, Rendered, SystemPrinter, TemplateRow } from './shared'
+import { isTsplPrinterName } from '@shared/labelPrinters'
 import {
   MAX_LABELS_PER_RUN, chunk, codeRangeText, shortfallExtra, shortfallLines, shortfallsOf, splitPlans, type IssuedLabels, type LabelPlan, type Shortfall
 } from './labelJob'
@@ -67,7 +68,7 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
   onPrinted?: () => void
 }) {
   const toast = useToast()
-  const { session } = useSession()
+  const { session, can } = useSession()
   const userId = session?.userId
   const [choice, setChoice] = useState<LabelChoice>({ presetId: DEFAULT_LABEL_PRESET })
   const [options, setOptions] = useState<LabelOptions>(DEFAULT_LABEL_OPTIONS)
@@ -81,6 +82,13 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
   /** Barcode problems found in the WHOLE job (the preview only shows the first label); printing waits for "Print anyway". */
   const [jobWarnings, setJobWarnings] = useState<string[] | null>(null)
   const seq = useRef(0)
+  /** null = not known yet; false = no label printer profile: labels would go to the Windows default printer */
+  const [hasLabelPrinter, setHasLabelPrinter] = useState<boolean | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [printers, setPrinters] = useState<SystemPrinter[]>([])
+  const [pick, setPick] = useState('')
+  const [direct, setDirect] = useState(true)
+  const [setupErr, setSetupErr] = useState<string | null>(null)
   /** which button asked last (the stock question is answered for that action) */
   const lastAction = useRef<'print' | 'pdf'>('print')
   /** product mode: what printing will do per variant (unique numbers or shared barcode), loaded when the dialog opens */
@@ -126,6 +134,38 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
   }, [open, userId, initialCopies])
 
   useEffect(() => { setJobWarnings(null); setShortfall(null) }, [choice, options, copies])
+
+  // is a label printer set up? Without one every label goes to the Windows default printer (an office printer, OneNote ...)
+  useEffect(() => {
+    if (!open) return
+    setSetupOpen(false); setSetupErr(null)
+    call<PrinterProfile[]>('printing', 'listPrinterProfiles').then((l) => setHasLabelPrinter(l.some((p) => p.kind === 'label'))).catch(() => setHasLabelPrinter(null))
+  }, [open])
+  const openSetup = async () => {
+    setSetupErr(null)
+    try {
+      const list = await call<SystemPrinter[]>('printing', 'listSystemPrinters')
+      setPrinters(list)
+      const guess = list.find((p) => isTsplPrinterName(`${p.name} ${p.displayName}`)) ?? list.find((p) => /label|barcode|zebra|godex|argox|citizen|sato|bixolon/i.test(p.name))
+      setPick(guess?.name ?? list[0]?.name ?? '')
+      setDirect(!!guess && isTsplPrinterName(`${guess.name} ${guess.displayName}`))
+      setSetupOpen(true)
+    } catch (e) {
+      setSetupErr(errMsg(e))
+    }
+  }
+  const saveSetup = async () => {
+    setSetupErr(null)
+    try {
+      await call('printing', 'savePrinterProfile', { name: 'Label printer', deviceName: pick, kind: 'label', isDefault: true, calibration: { tspl: direct, labelGapMm: 2, dpi: 203 } })
+      setHasLabelPrinter(true)
+      setSetupOpen(false)
+      toast('Label printer saved. Labels now go straight to it.', 'good')
+    } catch (e) {
+      setSetupErr(errMsg(e))
+    }
+  }
+
 
   // product mode: ask the server what each product's labels will carry (nothing is reserved by this)
   const variantKey = variantIds.join(',')
@@ -356,6 +396,31 @@ export function LabelPrintDialog({ open, onClose, variantIds, initialCopies = 1,
       }
     >
       {heading && <InlineAlert tone="good">{heading}</InlineAlert>}
+      {hasLabelPrinter === false && !size.sheet && (
+        <div style={{ marginTop: 8 }} data-testid="label-no-printer">
+          <InlineAlert
+            tone="warn" title="No label printer is set up"
+            action={can('printing.templates') && !setupOpen ? <Button size="sm" data-testid="label-setup-printer" onClick={() => void openSetup()}>Set up label printer</Button> : undefined}
+          >
+            Without one, labels go to the Windows default printer (often an office printer) and the Windows print dialog opens every time.
+            {!can('printing.templates') && ' Ask the owner to set up the label printer under Printing > Printers.'}
+            {setupOpen && (
+              <div style={{ marginTop: 8 }}>
+                <Field label="Label printer">
+                  <Select value={pick} aria-label="Label printer" onChange={(e) => { setPick(e.target.value); setDirect(isTsplPrinterName(e.target.value)) }}>
+                    {printers.map((p) => <option key={p.name} value={p.name}>{p.displayName}{p.isDefault ? ' (Windows default)' : ''}</option>)}
+                  </Select>
+                </Field>
+                <label style={{ display: 'block', marginBottom: 6 }}>
+                  <input type="checkbox" checked={direct} onChange={(e) => setDirect(e.target.checked)} /> Print directly in the printer's language (TSPL): sharpest labels, for 4BARCODE / TSC / Xprinter and similar printers
+                </label>
+                <span className="row"><Button size="sm" variant="primary" disabled={!pick} data-testid="label-setup-save" onClick={() => void saveSetup()}>Save label printer</Button><Button size="sm" onClick={() => setSetupOpen(false)}>Cancel</Button></span>
+              </div>
+            )}
+            {setupErr && <div className="field-error" role="alert">{setupErr}</div>}
+          </InlineAlert>
+        </div>
+      )}
       {blocked && <div style={{ marginTop: 8 }} data-testid="label-blocked"><InlineAlert tone="bad" title="Labels cannot be printed on this computer">{blocked} A damaged label can still be reprinted here.</InlineAlert></div>}
       {planErr && <div style={{ marginTop: 8 }}><InlineAlert tone="bad" title="Cannot prepare the labels">{planErr}</InlineAlert></div>}
       {shortfall && (

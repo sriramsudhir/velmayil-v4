@@ -33,6 +33,7 @@ export function register(app: App): void {
     lowStock: (a) => inv.lowStock(a),
     lowStockCount: (a) => inv.lowStockCount(a),
     adjust: (a) => inv.adjust(a),
+    setStock: (a) => inv.setStock(a),
     adjustments: (a) => inv.adjustments(a),
     countCreate: (a) => inv.countCreate(a),
     countList: (a) => inv.countList(a),

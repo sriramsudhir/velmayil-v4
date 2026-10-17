@@ -314,10 +314,16 @@ describe('report header', () => {
 
 describe('test page + calibration', () => {
   it('prints logo, shop name, address and a mm ruler/grid for each paper', () => {
-    for (const paper of ['58', '80', 'A4', 'A5', 'label'] as const) {
+    for (const paper of ['58', '80', 'A4', 'A5'] as const) {
       const { html } = renderTestPage(paper, profile(), {}, logo())
       for (const s of ['Acme Traders', '12 Market Road', 'class="ruler"', 'class="grid"', 'TEST PRINT', '<img class="logo"']) expect(html, paper).toContain(s)
     }
+    // a label printer gets ONE label of the label size: shop name, size, resolution, darkness, sample barcode and a mm scale
+    const { html } = renderTestPage('label', profile(), {}, logo())
+    for (const s of ['Acme Traders', 'TEST 50 mm x 25 mm', 'dpi', 'Print darkness 5 of 9', 'class="ruler"', 'it must read TEST-1234', '<svg class="barcode"']) expect(html).toContain(s)
+    expect(html.match(/class="sheet"/g)).toHaveLength(1)
+    // a label SHEET (A4 grid) keeps the full test page
+    expect(renderTestPage('label', profile(), { sheetCols: 3, sheetRows: 8, paperWidthMm: 210, paperHeightMm: 297 }, logo()).html).toContain('TEST PRINT')
   })
   it('prepareHtml adds CSP and calibration offsets/scale', () => {
     const out = prepareHtml('<html><head><title>x</title></head><body>b</body></html>', { offsetXmm: 2, offsetYmm: -1.5, scalePct: 95 })

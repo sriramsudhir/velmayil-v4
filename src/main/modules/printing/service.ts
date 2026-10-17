@@ -13,6 +13,7 @@ import { buildInvoiceDoc, latestSaleId, sampleInvoiceDoc } from './docBuilder'
 import { renderInvoice, renderLabels, renderReport, renderTestPage, type LabelItem, type ReportSpec } from './engine'
 import { buildDrawerKick, buildEscPosReceipt, buildEscPosTest, defaultPrintableMm, rasterFromPixels, rasterThresholdFor, type EscPosOptions, type LogoDecoder, type RasterImage } from './escpos'
 import { electronLogoDecoder, WindowsRawPrinter, type RawPrintAdapter } from './rawPrinter'
+import { buildTspl } from './tspl'
 
 type Row = Record<string, any>
 
@@ -374,9 +375,14 @@ export class PrintingService {
       printerName = prof?.deviceName ?? ''
       const cal = prof?.calibration ?? parseCalibration({})
       const size = this.pageSize(a.paper, a.widthMm, a.heightMm)
+      if (a.paper === 'label' && prof && cal.tspl) return await this.printTspl(a, prof, size, kept, warning)
       const html = prepareHtml(a.html, cal)
       let silent = a.showDialog ? false : cal.silent
-      if (!prof && silent) {
+      if (!prof && silent && a.paper === 'label') {
+        // the Windows default printer is almost never the label printer (an office laser, OneNote): let the user pick it
+        silent = false
+        warning = 'No label printer is set up, so the Windows print dialog was shown: choose the label printer there. Set it up under Printing > Printers (or "Set up label printer" in the label window) to print directly and sharply.'
+      } else if (!prof && silent) {
         const file = await this.virtualDefault()
         if (file) {
           silent = false
@@ -411,6 +417,38 @@ export class PrintingService {
       try {
         const logId = this.writeLog({ paper: a.paper, printer: printerName, ok: false, error, action: 'print', docRef: a.docRef, html: kept })
         return { ok: false, error, logId }
+      } catch {
+        return { ok: false, error }
+      }
+    }
+  }
+
+  /**
+   * Label printer profile with "direct (TSPL)" on: every label is drawn as a picture at the printer's resolution and sent as TSPL
+   * commands straight to the print queue (RAW), so the Windows driver cannot scale, shrink or dither it. Never redirected to another
+   * printer (TSPL on an office printer prints pages of garbage); never throws.
+   */
+  private async printTspl(a: PrintArgs, prof: PrinterProfile, size: { widthMm: number; heightMm: number }, kept: string, profWarning?: string): Promise<PrintResult> {
+    const printer = prof.deviceName
+    const cal = prof.calibration
+    try {
+      if (!this.adapter.rasterLabels) throw new Error('Direct label printing is not available on this computer: switch "Print in the printer\'s own language" off for this printer')
+      if (!(size.heightMm > 0)) throw new Error('The label height is not known: choose a label size')
+      // offsets go to the printer as whole dots and darkness as its own density: the picture itself is drawn as designed
+      const html = prepareHtml(a.html, { ...cal, offsetXmm: 0, offsetYmm: 0, scalePct: 100, darkness: 5, logoBrightness: 5 })
+      const one = await this.adapter.rasterLabels(html, { widthMm: size.widthMm, heightMm: size.heightMm, dpi: cal.dpi })
+      if (!one.length) throw new Error('Nothing to print: the document has no label')
+      const copies = Math.max(1, Math.min(50, a.copies ?? 1))
+      const labels = copies > 1 ? one.flatMap((b) => Array.from({ length: copies }, () => b)) : one
+      const bytes = buildTspl(labels, { widthMm: size.widthMm, heightMm: size.heightMm, gapMm: cal.labelGapMm, dpi: cal.dpi, darkness: cal.darkness, offsetXmm: cal.offsetXmm, offsetYmm: cal.offsetYmm, flip: cal.flip })
+      const res = await this.rawAdapter.sendRaw(printer, bytes)
+      const error = res.ok ? undefined : await this.rawError(printer, res.error)
+      const logId = this.writeLog({ paper: a.paper, printer, ok: res.ok, error: res.ok ? profWarning : error, action: 'print-tspl', docRef: a.docRef, html: kept })
+      return res.ok ? { ok: true, logId, ...(profWarning ? { warning: profWarning } : {}) } : { ok: false, error, logId }
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      try {
+        return { ok: false, error, logId: this.writeLog({ paper: a.paper, printer, ok: false, error, action: 'print-tspl', docRef: a.docRef, html: kept }) }
       } catch {
         return { ok: false, error }
       }

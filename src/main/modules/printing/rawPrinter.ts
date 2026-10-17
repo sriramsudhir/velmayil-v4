@@ -88,6 +88,17 @@ export class WindowsRawPrinter implements RawPrintAdapter {
     if (platform !== 'win32') return { ok: false, error: 'Raw ESC/POS printing is only available on Windows.' }
     if (!bytes.length) return { ok: false, error: 'Nothing to print.' }
     const id = randomUUID()
+    // Test/E2E hook (like the data folder override): keep the job as a file instead of printing it, so tests can check every byte
+    const dump = process.env.POS_RAW_DUMP_DIR
+    if (dump) {
+      try {
+        mkdirSync(dump, { recursive: true })
+        writeFileSync(join(dump, `${Date.now()}-${id}.bin`), bytes)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: `Could not keep the raw job: ${e instanceof Error ? e.message : String(e)}` }
+      }
+    }
     const dir = this.o.tmpDir
     const job = join(dir, `raw-${id}.bin`)
     const script = join(dir, `raw-${id}.ps1`)

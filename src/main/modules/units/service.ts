@@ -198,6 +198,19 @@ export class UnitsService {
     return { codes, left: free.length - codes.length }
   }
 
+  /**
+   * Unit codes to take out of stock when a quantity is corrected DOWN without naming the pieces (stock in hand on the product
+   * screen): pieces whose label was never printed first, then the most recently numbered ones (the likeliest mistake).
+   */
+  pickForRemoval(variantId: number, count: number, locationId: number): string[] {
+    return this.db
+      .all<{ code: string }>(
+        `SELECT code FROM product_units WHERE variant_id = ? AND location_id = ? AND status IN ${AVAIL_SQL} ORDER BY (label_printed_at IS NOT NULL), seq DESC, id DESC LIMIT ?`,
+        variantId, locationId, Math.max(0, count)
+      )
+      .map((u) => u.code)
+  }
+
   private bump(ids: number[]): void {
     this.enqueueUnits(ids)
   }
